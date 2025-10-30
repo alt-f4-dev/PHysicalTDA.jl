@@ -5,7 +5,7 @@ version = "0.1.0"
 [deps]
 GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
 PersistenceDiagrams = "5b605018-c8fc-5b38-b42d-3bdf2a4ba05d"
-Ripserer = "95e0b5f3-4d68-5e3a-9640-d766d21b6141"
+Ripserer = "aa79e827-bd0b-42a8-9f10-2b302677a641"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Sunny = "87d71aa3-35b2-4cca-8f24-9b27f6b0ef3a"
 
