@@ -1,0 +1,16 @@
+# Julia build artifacts
+*.ji
+*.jl.cov
+*.jl.mem
+
+# Environments
+Manifest.toml
+
+# Editors/OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Generated docs/builds
+docs/build/
