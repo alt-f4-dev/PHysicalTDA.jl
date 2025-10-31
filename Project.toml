@@ -1,6 +1,6 @@
 name = "PHysicalTDA"
 uuid = "f5e08b81-9a10-4c75-8e3a-8a27e9e3b0b7"   # gen with `julia --project -e 'using Pkg; Pkg.generate'`
-version = "0.1.0"
+version = "0.1.1"
 
 [deps]
 GLMakie = "e9467ef8-e4e7-5192-8a1a-b1aee30e663a"
