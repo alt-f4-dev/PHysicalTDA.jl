@@ -1,15 +1,15 @@
-using Phunny
+using PHysicalTDA
 using Documenter
 
-DocMeta.setdocmeta!(Phunny, :DocTestSetup, :(using Phunny); recursive=true)
+DocMeta.setdocmeta!(PHysicalTDA, :DocTestSetup, :(using PHysicalTDA); recursive=true)
 
 makedocs(;
-    modules=[Phunny],
-    authors="Isaac Ownby, Immanuel Schmidt",
-    sitename="Phunny.jl",
+    modules=[PHysicalTDA],
+    authors="Isaac Ownby, Collin Kovacs",
+    sitename="PHysicalTDA.jl",
     format=Documenter.HTML(;
     	prettyurls = get(ENV, "CI", "false") == "true",
-        canonical="https://mani149.github.io/Phunny.jl",
+        canonical="https://alt-f4-dev.github.io/PHysicalTDA.jl",
         edit_link="main",
         assets=String[],
     ),
@@ -21,6 +21,6 @@ makedocs(;
 )
 
 deploydocs(;
-    repo="github.com/mani149/Phunny.jl.git",
+    repo="github.com/alt-f4-dev/PHysicalTDA.jl.git",
     devbranch="main",
 )
