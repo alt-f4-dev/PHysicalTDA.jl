@@ -1,2 +1,2 @@
-using Test, .PHysicalTDA
+using Test, PHysicalTDA
 include("smoke.jl")

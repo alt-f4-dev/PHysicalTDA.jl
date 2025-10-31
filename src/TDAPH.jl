@@ -6,28 +6,6 @@ Returns an array of MAD values with the same shape as `t`.
 """
 @inline MAD(t) = 1.48 .* abs.(t .- median(vec(t)))
 """
-Plot lifetimes (|birth-death|) vs birth from a persistance diagram.
-Iterates over homology dimensions [0,1,...,maxdim] with labels.
-Assumes input is a Ripserer PD grouped by dimension. Returns Makie `Figure`.
-"""
-function lifetime_diagram(pd ;maxdim::Int=1)
-	living_fig = Figure(size = (720, 720))
-    	living_ax = Axis(living_fig[1, 1],
-			 xlabel = "Birth (% Intensity)", 
-			 ylabel = "Lifetime",
-			 title = "Feature Lifetime = |birth - death|")
-	label=["⁰","¹","²","³","⁴","⁵","⁶"]
-	for d in 0:maxdim
-		births = [birth(p) for p in pd[d + 1]]
-    		deaths = [death(p) for p in pd[d + 1]]
-		living = abs.( (births .- deaths) )
-		scatter!(living_ax, births, living; label = "Δ$(label[d+1])", marker = :circle)
-	end
-	# Add a legend in a separate grid cell
-    	Legend(living_fig[1, 2], living_ax)
-	return living_fig
-end
-"""
     persistence_entropy(pd; dims = 0:1, tol = 0.0)
 
 Compute per-dimension persistence entropy S_p and total persistence E_p.
@@ -143,24 +121,18 @@ function pd_array_intensity(A::AbstractArray{<:Real,N};
 			    normalize::Bool=false) where {N}
 	if normalize
 		maximum(A) == 0 && return ripserer(Cubical(zeros(size(A))); dim_max=maxdim), Figure()
-		Z = superlevel ? 1 .- (A ./ maximum(A)) : A / maximum(A)  #Superlevel Filtration: Suspect
+		Z = superlevel ? 1 .- (A ./ maximum(A)) : A / maximum(A)  
 		# superlevel => peaks appear early
 	else
 		Z = superlevel ? 1 .- A : A
 	end
 	
 	PD = ripserer(Cubical(Z); dim_max=maxdim)
-	sl = superlevel ? "superlevel" : "sublevel" 
-	fig = Figure(size=(720,720))
-	ax  = Axis(fig[1,1], xlabel="birth (% Intensity)", ylabel="death (% Intensity)",
-		   title="Persistence Diagram : ($(sl) filtration on cubical complex of $(N)D array)")
 	for d in 0:maxdim
 		bd = PD[d+1]; isempty(bd) && continue
 		bth = birth.(bd); dth = death.(bd)
-		scatter!(ax, bth, dth; label="Δ$(d)", marker=:circle)
 	end
-	Legend(fig[1,2], ax)
-	return PD, fig
+	return PD
 end
 """
 Wrapper: Sunny.Intensities -> dense Array -> pd_array_intensity

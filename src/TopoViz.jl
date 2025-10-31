@@ -1,15 +1,69 @@
+module TopoViz
+
+using Makie #Lazy Plot
+
+#import functions
+using ..PHysicalTDA: betti_curve
+using Ripserer: birth, death
+
+#export plotting utils
+export lifetime_diagram,
+       plot_betti_curvature, plot_persistence_entropy, 
+       plot_betti_surface, plot_dataset_overview
+
 #-----------------#
 # Low-Level Plots #
 #-----------------#
 
-function plot_betti_curvature(τ::AbstractVector, κ::Dict{Int, <:AbstractVector}; dims=0:1, title="Betti Curvature")
+function plot_persistence_diagram(PD; label::AbstractString="intensity", 
+                                      filtration::AbstractString="superlevel",
+                                      ndims::Int=2, maxdim::Int=1, 
+                                      title::AbstractString=nothing)
+    T = isnothing(title) ? "Persistence Diagram: ($filtration filtration on cubical complex of $(ndims)D array" : title
+    fig = Figure(size=(720, 720))
+    ax = Axis(fig[1,1], xlabel="birth ($label)", ylabel="death ($label)", title=T)
+    for d in 0:maxdim
+        bd = PD[d+1]; isempty(bd) && continue
+        bth = birth.(bd); dth = death.(bd)
+        scatter!(ax, bth, dth; label="Δ$d", marker=:circle)
+    end
+    Legend(fig[1,2], ax)
+    return fig
+end
+
+"""
+Plot lifetimes (|birth-death|) vs birth from a persistance diagram.
+Iterates over homology dimensions [0,1,...,maxdim] with labels.
+Assumes input is a Ripserer PD grouped by dimension. Returns Makie `Figure`.
+"""
+function plot_lifetime_diagram(pd ;maxdim::Int=1)
+	living_fig = Figure(size = (720, 720))
+    	living_ax = Axis(living_fig[1, 1],
+			 xlabel = "Birth (% Intensity)", 
+			 ylabel = "Lifetime",
+			 title = "Feature Lifetime = |birth - death|")
+	label=["⁰","¹","²","³","⁴","⁵","⁶"]
+	for d in 0:maxdim
+		births = [birth(p) for p in pd[d + 1]]
+    		deaths = [death(p) for p in pd[d + 1]]
+		living = abs.( (births .- deaths) )
+		scatter!(living_ax, births, living; label = "Δ$(label[d+1])", marker = :circle)
+	end
+	# Add a legend in a separate grid cell
+    	Legend(living_fig[1, 2], living_ax)
+	return living_fig
+end
+
+function plot_betti_curvature(τ::AbstractVector, κ::Dict{Int, <:AbstractVector}; 
+                              dims=0:1, title="Betti Curvature")
     fig = Figure(size=(750,520))
     ax = Axis(fig[1,1], xlabel="τ", ylabel="κₚ(τ)", title=title)
     for p in dims
         haskey(κ,p) || continue
         lines!(ax, τ, κ[p], label="κₚ")
     end
-    Legend(fig[1,2], ax); screen = display(fig); wait(screen)
+    Legend(fig[1,2], ax)
+    return fig
 end
 
 
@@ -25,7 +79,7 @@ function plot_persistence_entropy(dataset; p::Int=0, cvals=nothing, title="Entro
     ax = Axis(fig[1,1], xlabel="Sₚ", ylabel="Eₚ", title=title)
     sc = scatter!(ax, S, E; color=C, markersize=9)
     Colorbar(fig[1,2], sc; label=cvals===nothing ? "path index" : "color")
-    screen = display(fig); wait(screen)
+    return fig
 end
 
 
@@ -34,8 +88,8 @@ function plot_betti_surface(dataset; p::Int=0, nτ::Int=256, title="Betti Surfac
     for r in dataset
         for Δ in r.PD
             isempty(Δ) && continue
-            append!(tmins, filter(isfinite, [birth(x) for x in Δ]))
-            append!(tmaxs, filter(isfinite, [death(x) for x in Δ]))
+            append!(tmins, filter(isfinite, (birth(x) for x in Δ)))
+            append!(tmaxs, filter(isfinite, (death(x) for x in Δ)))
         end
     end
     if isempty(tmins) || isempty(tmaxs)
@@ -53,7 +107,7 @@ function plot_betti_surface(dataset; p::Int=0, nτ::Int=256, title="Betti Surfac
     ax = Axis(fig[1,1], xlabel="τ", ylabel="path index", title=title)
     hm = heatmap!(ax, collect(τ), 1:length(dataset), βmatrix)
     Colorbar(fig[1,2], hm; label="βₚ")
-    screen = display(fig); wait(screen)
+    return fig
 end
 
 #------------------#
@@ -75,8 +129,8 @@ function plot_dataset_overview(dataset; p::Int=0, nτ::Int=256, savepath::Union{
     for r in dataset
         for Δ in r.PD
             isempty(Δ) && continue
-            append!(tmins, filter(isfinite, [birth(x) for x in Δ]))
-            append!(tmaxs, filter(isfinite, [death(x) for x in Δ]))
+            append!(tmins, filter(isfinite, (birth(x) for x in Δ)))
+            append!(tmaxs, filter(isfinite, (death(x) for x in Δ)))
         end
     end
     if isempty(tmins) || isempty(tmaxs)
@@ -93,6 +147,7 @@ function plot_dataset_overview(dataset; p::Int=0, nτ::Int=256, savepath::Union{
     Colorbar(fig[2,2], hm; label="β_$p")
     Label(fig[2,3], τinfo)
     savepath === nothing || save(fig, savepath)
-    screen = display(fig); wait(screen)
+    return fig
 end
 
+end #module
