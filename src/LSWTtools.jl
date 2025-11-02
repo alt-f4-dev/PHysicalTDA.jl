@@ -8,7 +8,7 @@ Assumes input is a Sunny.System corresponding to the provided Sunny.Crystal type
 function LSWT(cryst, sys; energies = range(0,350,500), kern = gaussian(fwhm=35), qdims=(1,1,1), qstep=0.1)
 	
     Nh = qdims[1]; Nk = qdims[2]; Nl = qdims[3]; Δq = qstep
-    Qs = [[h,k,l] for h in -Nh:Δq:Nh, k in -Nk:dk:Nk, l in -Nl:dl:Nl]
+    Qs = [[h,k,l] for h in -Nh:Δq:Nh, k in -Nk:Δq:Nk, l in -Nl:Δq:Nl]
 	
     swt2D = SpinWaveTheory(sys; measure=ssf_perp(sys))
     result2D = intensities(swt2D, Qs[:]; energies, kernel=kern)
