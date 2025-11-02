@@ -120,9 +120,8 @@ function pd_array_intensity(A::AbstractArray{<:Real,N};
 			    maxdim::Int=1, superlevel::Bool=true, 
 			    normalize::Bool=false) where {N}
 	if normalize
-		maximum(A) == 0 && return ripserer(Cubical(zeros(size(A))); dim_max=maxdim), Figure()
-		Z = superlevel ? 1 .- (A ./ maximum(A)) : A / maximum(A)  
-		# superlevel => peaks appear early
+		maximum(A) == 0 && return ripserer(Cubical(zeros(size(A))); dim_max=maxdim)
+		Z = superlevel ? 1 .- (A ./ maximum(A)) : A / maximum(A)
 	else
 		Z = superlevel ? 1 .- A : A
 	end
