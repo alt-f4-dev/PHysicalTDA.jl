@@ -35,7 +35,7 @@ function LSWT(cryst, sys; energies = range(0,350,500), kern = gaussian(fwhm=35),
             append!(dirs, [[1,0,0], [0,1,0], [0,0,1], [-1,0,0], [0,-1,0], [0,0,-1]])
         end
         if include_face_diagonals
-                ppend!(dirs, [[1,1,0], [1,0,1], [0,1,1], -[1,1,0], -[1,0,1], -[0,1,1]])
+            append!(dirs, [[1,1,0], [1,0,1], [0,1,1], -[1,1,0], -[1,0,1], -[0,1,1]])
         end
         if include_body_diagonals
             append!(dirs, [[1,1,1], -[1,1,1]])
