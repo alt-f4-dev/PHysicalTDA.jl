@@ -2,6 +2,7 @@ using Sunny
 using .PHysicalTDA            # exports: pd_sunny_intensities, persistence_entropy, betti_curve, betti_curvature
 using Ripserer
 import PersistenceDiagrams: birth, death
+
 # --- per-path PD + fingerprints ---
 struct PathTopo
     idx::Int
