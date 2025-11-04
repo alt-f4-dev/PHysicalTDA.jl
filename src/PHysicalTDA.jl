@@ -20,6 +20,18 @@ const _viz_loaded = Ref(false)
 
 function enable_visuals(; backend::Symbol = :gl)
     _viz_loaded[] && return nothing
+
+    function _lazy_import(modsym::Symbol)
+        try
+            if !isdefined(Main, modsym)
+                Base.require(Main, modsym)
+            end
+            return getfield(Main, modsym)
+        catch err
+            @warn "Failed to load $modsym - $(err)"
+        end
+    end
+
     if backend === :gl
         @info "Activating GLMakie backend..."
         #@eval begin
@@ -28,8 +40,10 @@ function enable_visuals(; backend::Symbol = :gl)
             #mod = Base.require(Base, :GLMakie)
             #getfield(mod, :activate!)()
         #end
-        Core.eval(@__MODULE__, :(import GLMakie))
-        GLMakie.activate!()
+        #Core.eval(@__MODULE__, :(import GLMakie))
+        #GLMakie.activate!()
+        mod = _lazy_import(:GLMakie)
+        mod !=== nothing && getfield(mod, :activate!)()
     elseif backend === :cairo
         @info "Activating CairoMakie backend..."
         #@eval begin
@@ -38,8 +52,10 @@ function enable_visuals(; backend::Symbol = :gl)
             #mod = Base.require(Base, :CairoMakie)
             #getfield(mod, :activate!)()
         #end
-        Core.eval(@__MODULE__, :(import CairoMakie))
-        CairoMakie.activate!()
+        #Core.eval(@__MODULE__, :(import CairoMakie))
+        #CairoMakie.activate!()
+        mod = _lazy_import(:CairoMakie)
+        mod !=== nothing && getfield(mod, :activate!)()
     else
         error("Unknown backend: $backend (use :gl or :cairo)")
     end 
