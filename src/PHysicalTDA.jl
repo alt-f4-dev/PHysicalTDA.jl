@@ -22,13 +22,17 @@ function enable_visuals(; backend::Symbol = :gl)
     _viz_loaded[] && return nothing
     if backend === :gl
         @eval begin
-            import GLMakie
-            GLMakie.activate!()
+            #import GLMakie
+            #GLMakie.activate!()
+            mod = Base.require(:GLMakie)
+            getfield(mod, :activate!)()
         end
     elseif backend === :cairo
         @eval begin
-            import CairoMakie
-            CairoMakie.activate!()
+            #import CairoMakie
+            #CairoMakie.activate!()
+            mod = Base.require(:CairoMakie)
+            getfield(mod, :activate!)()
         end
     else
         error("Unknown backend: $backend (use :gl or :cairo)")

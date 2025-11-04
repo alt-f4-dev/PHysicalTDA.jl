@@ -6,21 +6,21 @@ Returns an array of MAD values with the same shape as `t`.
 """
 @inline MAD(t) = 1.48 .* abs.(t .- median(vec(t)))
 """
-    persistence_entropy(pd; dims = 0:1, tol = 0.0)
+    persistence_entropy(PDs; dims = 0:1, tol = 0.0)
 
-Compute per-dimension persistence entropy S_p and total persistence E_p.
+Compute per-dimension persistence entropy Sₚ and total persistence Eₚ.
 
-- `pd` is a Ripserer persistence diagram, grouped by homology degree as returned by `ripserer(...)`.
+- `PDs` is a vector of Ripserer persistence diagrams, grouped by homology degree as returned by `pd_array_intensities()` or `pd_sunny_intensities()`.
 - `dims` selects homology degrees (default 0:1).
-- `tol` discards lifetimes ≤ tol (guards numerical noise).
+- `tol` discards `lifetimes ≤ tol` (guards numerical noise).
 
 Returns `(S::Dict{Int,Float64}, E::Dict{Int,Float64})` keyed by p.
 """
-function persistence_entropy(pd; dims = 0:1, tol::Real = 0.0)
+function persistence_entropy(PDs::Vector{PersistenceDiagrams.PersistenceDiagram}; dims = 0:1, tol::Real = 0.0)
 	S = Dict{Int,Float64}()
 	E = Dict{Int,Float64}()
 	for p in dims
-		bd = p+1 <= length(pd) ? pd[p+1] : ()
+		bd = p+1 <= length(PDs) ? PDs[p+1] : ()
 		isempty(bd) && (S[p] = 0.0; E[p] = 0.0; continue)
 		# lifetimes
 		τ = Float64[death(x) - birth(x) for x in bd]
@@ -36,20 +36,20 @@ function persistence_entropy(pd; dims = 0:1, tol::Real = 0.0)
 	return S, E
 end
 """
-    betti_curve(pd, τ; dims = 0:1)
+    betti_curve(PDs, τ; dims = 0:1)
 
 Compute per-dimension Betti curves β_p(τ_j) on a user-provided grid `τ`.
 
-- `pd` is a Ripserer PD (grouped by degree).
+- `PDs` is a vector of Ripserer PD (grouped by degree).
 - `τ` is a sorted vector of thresholds (monotone increasing).
 
 Returns `Dict{Int,Vector{Int}}` mapping p ↦ β_p(τ).
 """
-function betti_curve(pd, τ::AbstractVector{<:Real}; dims = 0:1)
+function betti_curve(PDs::Vector{PersistenceDiagrams.PersistenceDiagram}, τ::AbstractVector{<:Real}; dims = 0:1)
     @assert issorted(τ) "τ must be sorted ascending"
     β = Dict{Int, Vector{Int}}()
     for p in dims
-        bd = p+1 <= length(pd) ? pd[p+1] : ()
+        bd = p+1 <= length(PDs) ? PDs[p+1] : ()
         if isempty(bd)
             β[p] = zeros(Int, length(τ))
             continue
@@ -109,7 +109,8 @@ function betti_curvature(pd, τ::AbstractVector{<:Real}; dims = 0:1, scheme::Sym
 end
 """
 Computes persistance diagrams of an intensity array via cubical complexes.
-Returns (PD, Figure) with birth–death scatter per dimension up to `maxdim`.
+Returns PDs with birth–death scatter per dimension, grouped by homology
+degree up to `maxdim`.
 
 Optional superlevel filtration (invert intensities) and normalization to [0,1].
 Used to analyze the topology of S(Q,ω) slices or projections.
