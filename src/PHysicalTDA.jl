@@ -24,14 +24,14 @@ function enable_visuals(; backend::Symbol = :gl)
         @eval begin
             #import GLMakie
             #GLMakie.activate!()
-            mod = Base.require(:GLMakie)
+            mod = Base.require(Base, :GLMakie)
             getfield(mod, :activate!)()
         end
     elseif backend === :cairo
         @eval begin
             #import CairoMakie
             #CairoMakie.activate!()
-            mod = Base.require(:CairoMakie)
+            mod = Base.require(Base, :CairoMakie)
             getfield(mod, :activate!)()
         end
     else
