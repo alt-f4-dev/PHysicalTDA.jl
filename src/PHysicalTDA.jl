@@ -86,7 +86,7 @@ end
 function plot_betti_curvature(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
     #return TopoViz.plot_betti_curvature(args...; kwargs...)
-    return Base.invokelatest(TopoViz.plot_betti_curvature, args; kwargs...)
+    return Base.invokelatest(TopoViz.plot_betti_curvature, args...; kwargs...)
 end
 function plot_betti_surface(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
