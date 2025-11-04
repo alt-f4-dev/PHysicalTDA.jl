@@ -59,7 +59,8 @@ function enable_visuals(; backend::Symbol = :gl)
     else
         error("Unknown backend: $backend (use :gl or :cairo)")
     end 
-    @eval include(joinpath(@__DIR__, "TopoViz.jl"))
+    #@eval include(joinpath(@__DIR__, "TopoViz.jl"))
+    Base.invokelatest(include, joinpath(@__DIR__,"TopoViz.jl"))
     _viz_loaded[] = true
     return nothing
 end
@@ -69,27 +70,33 @@ end
 #Lazy Plot Entry
 function plot_persistence_diagram(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return TopoViz.plot_persistence_diagram(args...; kwargs...)
+    #return TopoViz.plot_persistence_diagram(args...; kwargs...)
+    return Base.invokelatest(TopoViz.plot_persistence_diagram, args...; kwargs...)
 end
-function lifetime_diagram(args...; backend::Symbol=:gl, kwargs...)
+function plot_lifetime_diagram(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return TopoViz.lifetime_diagram(args...; kwargs...)
+    #return TopoViz.lifetime_diagram(args...; kwargs...)
+    return Base.invokelatest(TopoViz.plot_lifetime_diagram, args...; kwargs...)
 end
 function plot_persistence_entropy(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return TopoViz.plot_persistence_entropy(args...; kwargs...)
+    #return TopoViz.plot_persistence_entropy(args...; kwargs...)
+    return Base.invokelatest(TopoViz.plot_persistence_entropy, args...; kwargs...)
 end
 function plot_betti_curvature(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return TopoViz.plot_betti_curvature(args...; kwargs...)
+    #return TopoViz.plot_betti_curvature(args...; kwargs...)
+    return Base.invokelatest(TopoViz.plot_betti_curvature, args; kwargs...)
 end
 function plot_betti_surface(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return TopoViz.plot_betti_curvature(args...; kwargs...)
+    #return TopoViz.plot_betti_curvature(args...; kwargs...)
+    return Base.invokelatest(TopoViz.plot_betti_surface, args...; kwargs...)
 end
 function plot_data_set_overview(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return TopoVize.plot_betti_curvature(args...; kwargs...)
+    #return TopoViz.plot_betti_curvature(args...; kwargs...)
+    return Base.invokelatest(TopoViz.plot_betti_curvature, args...; kwargs...)
 end
 
 end #module
