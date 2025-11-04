@@ -38,7 +38,7 @@ function enable_visuals(; backend::Symbol = :gl)
             #mod = Base.require(Base, :CairoMakie)
             #getfield(mod, :activate!)()
         #end
-        Core.eval(@__MODULE_, :(import CairoMakie))
+        Core.eval(@__MODULE__, :(import CairoMakie))
         CairoMakie.activate!()
     else
         error("Unknown backend: $backend (use :gl or :cairo)")
