@@ -13,7 +13,7 @@ include("CrystalDB.jl"); include("LSWTtools.jl"); include("TDAPH.jl")
 
 #Lazy Plotting
 export enable_visuals, 
-       plot_persistence_diagram, lifetime_diagram,
+       plot_persistence_diagram, plot_lifetime_diagram,
        plot_persistence_entropy, plot_betti_curvature, 
        plot_betti_surface, plot_dataset_overview
 const _viz_loaded = Ref(false)
