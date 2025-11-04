@@ -54,10 +54,8 @@ function enable_visuals(; backend::Symbol = :gl)
         #end
         #Core.eval(@__MODULE__, :(import CairoMakie))
         #CairoMakie.activate!()
-        #mod = _lazy_import(:CairoMakie)
-        #mod !== nothing && getfield(mod, :activate!)()
-        import CairoMakie
-        CairoMakie.activate!()
+        mod = _lazy_import(:CairoMakie)
+        mod !== nothing && getfield(mod, :activate!)()
     else
         error("Unknown backend: $backend (use :gl or :cairo)")
     end 
