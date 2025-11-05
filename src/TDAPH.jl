@@ -4,7 +4,7 @@ Applies elementwise relative to the median of `t`.
 Suitable for thresholding outliers in intensity arrays.
 Returns an array of MAD values with the same shape as `t`.
 """
-@inline MAD(t) = 1.48 .* abs.(t .- median(vec(t)))
+@inline MAD(t) = 1.48 .* median.(abs.(t .- median(vec(t))))
 """
     persistence_entropy(PDs; dims = 0:1, tol = 0.0)
 
@@ -113,26 +113,33 @@ Returns PDs with birth–death scatter per dimension, grouped by homology
 degree up to `maxdim`.
 
 Optional superlevel filtration (invert intensities) and normalization to [0,1].
-Used to analyze the topology of S(Q,ω) slices or projections.
-
-Note, superlevel and normalization need validation tests!
+Used to analyze the topology of I(Q,ω) = |S(Q,ω)|².
 """
 function pd_array_intensity(A::AbstractArray{<:Real,N};
 			    maxdim::Int=1, superlevel::Bool=true, 
 			    normalize::Bool=false) where {N}
-	if normalize
-		maximum(A) == 0 && return ripserer(Cubical(zeros(size(A))); dim_max=maxdim)
-		Z = superlevel ? 1 .- (A ./ maximum(A)) : A / maximum(A)
-	else
-		Z = superlevel ? 1 .- A : A
-	end
+    if any(x -> !isfinite(x), A)
+        A = map(x -> isfinite(x) ? x : 0.0, A)
+    end
+
+    if normalize
+            amin, amax = extrema(A)
+            if amax == amin
+                Z = zeros(size(A))
+            else
+                A = (A .- amin) ./ (amax - amin)
+                Z = superlevel ? 1 .- A : A
+            end
+    else
+	    Z = superlevel ? 1 .- A : A
+    end
 	
-	PD = ripserer(Cubical(Z); dim_max=maxdim)
-	for d in 0:maxdim
-		bd = PD[d+1]; isempty(bd) && continue
-		bth = birth.(bd); dth = death.(bd)
-	end
-	return PD
+    PD = ripserer(Cubical(Z); dim_max=maxdim)
+    for d in 0:maxdim
+	    bd = PD[d+1]; isempty(bd) && continue
+	    bth = birth.(bd); dth = death.(bd)
+    end
+    return PD
 end
 """
 Wrapper: Sunny.Intensities -> dense Array -> pd_array_intensity
