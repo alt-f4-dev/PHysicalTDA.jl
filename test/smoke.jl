@@ -1,4 +1,4 @@
-using Test, PHysicalTDA, Makie
+using Test, PHysicalTDA
 
 @testset "Crystal + LSWT + TDA smoke" begin
 	cryst, sys = La2CuO4()
@@ -17,9 +17,9 @@ using Test, PHysicalTDA, Makie
 	#Light determinism check on path count
 	@test length(results) == length(paths)
         
-        PHysicalTDA.enable_visuals(backend=:cairo)
-        
-        fig = PHysicalTDA.plot_betti_curvature(0:0.1:1, Dict(0=>rand(11)); 
-                                               backend=:cairo)
-        @test isa(fig, Figure)
+        #TopoViz.jl tests will be added later.
+        #
+        #PHysicalTDA.enable_visuals(backend=:cairo)
+        #fig = PHysicalTDA.plot_betti_curvature(0:0.1:1, Dict(0=>rand(11)); backend=:cairo)
+        #@test isa(fig, Figure)
 end
