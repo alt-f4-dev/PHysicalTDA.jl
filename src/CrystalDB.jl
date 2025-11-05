@@ -1,10 +1,9 @@
 """
 Constructs a tetragonal La₂CuO₄-like crystal and Sunny spin system.
 Applies J, J′, J″, Jc exchanges, randomizes spins, and minimizes energy.
-Returns (crystal, system)
 
 Space Group: 139 ~ Single Cu Ion @ [0,0,0] | (s=1/2, g=2)
-Supercell: (6x6x3) 
+Supercell: (6×6×3) 
 
 Returns (cryst::Sunny.Crystal, sys::Sunny.System).
 """
@@ -31,11 +30,14 @@ function La2CuO4()
 	return cryst, sys
 end
 """
-Constructs monoclinic (low temp.) (CH₃)₄[NMnCl₃] (TMMC) crystal via Sunny.
-Applies exchange coupling J and anisotropic exchange Δ (along ̂z).
+Constructs low-temperature monoclinic (CH₃)₄[NMnCl₃] crystal via Sunny.
+Applies exchange coupling J and anisotropic exchange Δ (along z-axis).
 
-Space group: 14 (P2₁/b) ~ Single Mn Ion @ [1/5, 1/4, 1/5] | (s=5/2, g=2 
-Supercell: (1,4,150)
+This crystal is commonly referred to as TMMC. It is a 1D high-spin 
+Heisenberg chain.
+
+Space group: 14 (P2₁/b) ~ Single Mn Ion @ [1/5, 1/4, 1/5] | (s=5/2, g=2)
+Supercell: (1×4×150)
 
 Returns (cryst::Sunny.Crystal, sys::Sunny.System)
 """
