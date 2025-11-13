@@ -6,15 +6,17 @@ using Makie #Lazy Plot
 using ..PHysicalTDA: betti_curve
 using Ripserer: birth, death
 
-#export plotting utils
+#export plotting utils (non-mutatint)
 export plot_persistence_diagram, plot_lifetime_diagram,
        plot_betti_curvature, plot_persistence_entropy, 
        plot_betti_surface, plot_dataset_overview
 
+
+#export plotting utils (mutating)
+
 #-----------------#
 # Low-Level Plots #
 #-----------------#
-
 function plot_persistence_diagram(PD; label::AbstractString="intensity", 
                                       filtration::AbstractString="superlevel",
                                       ndims::Int=2, maxdim::Int=1, 
@@ -30,30 +32,28 @@ function plot_persistence_diagram(PD; label::AbstractString="intensity",
     Legend(fig[1,2], ax)
     return fig
 end
-
 """
 Plot lifetimes (|birth-death|) vs birth from a persistance diagram.
 Iterates over homology dimensions [0,1,...,maxdim] with labels.
 Assumes input is a Ripserer PD grouped by dimension. Returns Makie `Figure`.
 """
 function plot_lifetime_diagram(pd ;maxdim::Int=1)
-	living_fig = Figure(size = (720, 720))
-    	living_ax = Axis(living_fig[1, 1],
-			 xlabel = "Birth (% Intensity)", 
-			 ylabel = "Lifetime",
-			 title = "Feature Lifetime = |birth - death|")
-	label=["⁰","¹","²","³","⁴","⁵","⁶"]
-	for d in 0:maxdim
-		births = [birth(p) for p in pd[d + 1]]
-    		deaths = [death(p) for p in pd[d + 1]]
-		living = abs.( (births .- deaths) )
-		scatter!(living_ax, births, living; label = "Δ$(label[d+1])", marker = :circle)
-	end
-	# Add a legend in a separate grid cell
-    	Legend(living_fig[1, 2], living_ax)
-	return living_fig
+    living_fig = Figure(size = (720, 720))
+    living_ax = Axis(living_fig[1, 1],
+                     xlabel = "Birth (% Intensity)", 
+                     ylabel = "Lifetime",
+                     title = "Feature Lifetime = |birth - death|")
+    label=["⁰","¹","²","³","⁴","⁵","⁶"]
+    for d in 0:maxdim
+	births = [birth(p) for p in pd[d + 1]]
+    	deaths = [death(p) for p in pd[d + 1]]
+	living = abs.( (births .- deaths) )
+	scatter!(living_ax, births, living; label = "Δ$(label[d+1])", marker = :circle)
+    end
+    # Add a legend in a separate grid cell
+    Legend(living_fig[1, 2], living_ax)
+    return living_fig
 end
-
 function plot_betti_curvature(τ::AbstractVector, κ::Dict{Int, <:AbstractVector}; 
                               dims=0:1, title="Betti Curvature")
     fig = Figure(size=(750,520))
@@ -70,7 +70,6 @@ end
 #---------------------#
 # Dataset-Level Plots #
 #---------------------#
-
 function plot_persistence_entropy(dataset; p::Int=0, cvals=nothing, title="Entropy-Persistence Map")
     S = [get(r.S, p, 0.0) for r in dataset]
     E = [get(r.E, p, 0.0) for r in dataset]
@@ -81,8 +80,6 @@ function plot_persistence_entropy(dataset; p::Int=0, cvals=nothing, title="Entro
     Colorbar(fig[1,2], sc; label=cvals===nothing ? "path index" : "color")
     return fig
 end
-
-
 function plot_betti_surface(dataset; p::Int=0, nτ::Int=256, title="Betti Surface βₚ(q,τ)")
     tmins = Float64[]; tmaxs = Float64[]
     for r in dataset

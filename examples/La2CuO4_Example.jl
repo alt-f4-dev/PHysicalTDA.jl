@@ -1,34 +1,43 @@
-using .PHysicalTDA, Sunny, Ripserer, GLMakie, Statistics
+using PHysicalTDA, Sunny, Ripserer, GLMakie, Statistics
 import PersistenceDiagrams: birth, death
 
 
 #--------------------------------#
 # Load Crystal and LSWT Spectrum #
 #--------------------------------#
-cryst, sys = La2CuO4()
-(result2D, results_paths, Es) = LSWT(cryst, sys)
-
+cryst, sys = La2CuO4(); LCO = LSWT(cryst, sys)
+qpaths = LCO.qpaths; ωaxis = LCO.energies
+qpathIntensities = LCO.intensities
 
 #------------------------------#
 # Construct 4D Intensity Field #
 #------------------------------#
-A4 = convert4D(result2D[1], result2D[2], Es)
-hkl= collapse(A4; over=:w, op=sum)
-hw = collapse(A4; over=(:k,:l), op=mean)
+
+# 3D Grid of Q-points
+Qs = [[h,k,ℓ] for h in -1:0.1:1, k in -1:0.1:1, ℓ in -1:0.1:1]
+
+# Perform LSWT
+swt = SpinWaveTheory(sys; measure=ssf_perp(sys))
+result2D = intensities(swt, Qs[:]; energies, kernel=Gaussian(fwhm=35))
+
+# Convert to 4D
+result4D = convert4D(result2D, Qs, Es)
+
+#Slice projections
+hkl= collapse(result4D; over=:w, op=sum)
+hw = collapse(result4D; over=(:k,:l), op=mean)
 
 #------------------------------#
 # Compute Persistence Diagrams #
 #------------------------------#
-PD, fig = pd_sunny_intensities(result2D[1]; maxdim=2, superlevel=true, normalize=true)
-s1 = display(fig)
-wait(s1)
+PD = pd_sunny_intensities(result2D; maxdim=2, superlevel=true, normalize=true)
 
 #------------------------------#
 # Topological Fingerprinting   #
 #------------------------------#
 
 # Persistence Entropy & Total Persistence
-Sp, Ep = persistence_entropy(PD; dims=0:2, tol=0.0, N::Int=256)
+Sₚ, Eₚ = persistence_entropy(PD; dims=0:2, tol=0.0, N::Int=256)
 
 #Construct tau-grid spanning births..deaths in PD
 function taugrid(PD)
@@ -62,11 +71,11 @@ end
 tau = taugrid(PD)
 
 # Betti curves and Betti curvature on tau-grid
-betti, kappa = betti_curvature(PD, tau; dims=0:2, scheme=:forward)
+β, κ = betti_curvature(PD, tau; dims=0:2, scheme=:forward)
 
-#------------------------------#
-# Validation Checks	       #
-#------------------------------#
+#-----------------------------------#
+# Validation Check: εₚ = ∫βₚ(τ)dτ   #
+#-----------------------------------#
 function trapz(x,y)
 	s = 0.0
 	@inbounds for i in 1:length(x)-1
@@ -76,9 +85,9 @@ function trapz(x,y)
 end
 
 for p in 0:2
-	betti_p = get(betti, p, zeros(length(tau)))
-	Ep_estimate = trapz(tau, float.(betti_p))
-	Ep_numerical = get(Ep, p, 0.0)
-	rel_err = isapprox(Ep_numerical, 0) ? 0.0 : abs(Ep_estimate - Ep_numerical)/max(Ep_numerical, 1e-12)
-	@info "p=$p ∫β_p dτ ≈ $(round(Ep_estimate,digits=4)) vs Ep = $(round(Ep_numerical,digits=4)) | rel.err = $(round(rel_err,digits=3))"
+	βₚ = get(β, p, zeros(length(tau)))
+	Eₚ_estimate = trapz(tau, float.(betti_p))
+	Eₚ_numerical = get(Eₚ, p, 0.0)
+	rel_err = isapprox(Eₚ_numerical, 0) ? 0.0 : abs(Eₚ_estimate - Eₚ_numerical)/max(Eₚ_numerical, 1e-12)
+	@info "p=$p : ∫βₚ dτ ≈ $(round(Eₚ_estimate,digits=4)) vs Ep = $(round(Eₚ_numerical,digits=4)) | rel.err = $(round(rel_err,digits=3))"
 end
