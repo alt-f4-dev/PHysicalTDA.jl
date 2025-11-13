@@ -4,22 +4,19 @@ using Test, PHysicalTDA
 	cryst, sys = La2CuO4()
 	@test !isnothing(cryst) && !isnothing(sys)
 	
-	(r2D, rpaths, Es) = PHysicalTDA.LSWT(cryst, sys)
-	result2D, Qs = r2D; @test !isempty(Es) && !isempty(Qs)
-	results, paths = rpaths; @test !isempty(results) && !isempty(paths)
-		
-	A4 = convert4D(result2D, Qs, Es); @test ndims(A4) == 4
-	hkl= collapse(A4; over=:w, op=sum); @test ndims(hkl) == 3
-
-	PD, _ = pd_sunny_intensities(result2D; maxdim=1, superlevel=false)
-	@test length(PD) >= 1
+	LCO = PHysicalTDA.LSWT(cryst, sys)
+        qpaths = LCO.qpaths; ωaxis = LCO.energies
+        qpathIntensities = LCO.intensities
+	@test !isempty(qpaths) && !isempty(ωaxis)
+	@test !isempty(qpathIntensities)
+        
+	PD = pd_sunny_intensities(result2D; maxdim=1, superlevel=false)
+	@test length(PD) ≥ 1
 
 	#Light determinism check on path count
-	@test length(results) == length(paths)
+	@test length(qpathIntensities) == length(qpaths)
         
-        #TopoViz.jl tests will be added later.
-        #
-        #PHysicalTDA.enable_visuals(backend=:cairo)
-        #fig = PHysicalTDA.plot_betti_curvature(0:0.1:1, Dict(0=>rand(11)); backend=:cairo)
-        #@test isa(fig, Figure)
+        #To Add: 
+        #       - TopoViz.jl tests
+        #       - Fingerprint tests
 end
