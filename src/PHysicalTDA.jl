@@ -10,7 +10,7 @@ export La2CuO4, TMMC
 export LSWT, convert4D, collapse
 
 #Persistence Homology
-export MAD, pd_array_intensity, pd_sunny_intensities, persistence_entropy, betti_curvature
+export MAD, pd_array_intensity, pd_sunny_intensities, persistence_entropy, persistence_entropy_curve, betti_curve, betti_curvature
 
 #Internal Submodules 
 include("CrystalDB.jl"); include("LSWTtools.jl"); include("TDAPH.jl")
