@@ -1,4 +1,4 @@
-using Test, PHysicalTDA
+using Test, Sunny, PHysicalTDA
 
 @testset "Crystal + LSWT + TDA smoke" begin
     cryst, sys = La2CuO4()
@@ -8,9 +8,9 @@ using Test, PHysicalTDA
     h = [[-1,0,0], [0,0,0], [1,0,0]]
     k = [[0,-1,0], [0,0,0], [0,1,0]]
     l = [[0,0,-1], [0,0,0], [0,0,1]]
-    H = Sunny.q_space_path(cryst, h, Nq)
-    K = Sunny.q_space_path(cryst, k, Nq)
-    L = Sunny.q_space_path(cryst, l, Nq)
+    H = q_space_path(cryst, h, Nq)
+    K = q_space_path(cryst, k, Nq)
+    L = q_space_path(cryst, l, Nq)
     paths = [H,K,L]
     LCO = PHysicalTDA.LSWT(cryst, sys, paths)
     qpaths = LCO.qpaths; ωaxis = LCO.energies
