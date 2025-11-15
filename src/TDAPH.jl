@@ -187,7 +187,7 @@ function betti_curvature(pd, τ::AbstractVector{<:Real}; dims = 0:1, scheme::Sym
     β = betti_curve(pd, τ; dims); κ = Dict{Int, Vector{Float64}}(); Δτ = diff(collect(τ))
     @assert all(Δτ .> 0) "τ grid must be strictly increasing"
     for p in dims
-        βₚ = β[p]; κₚ = zeros(Float64, length(βp))
+        βₚ = β[p]; κₚ = zeros(Float64, length(βₚ))
         if scheme === :forward
             @inbounds for j in 1:length(Δτ)
                 κₚ[j] = (βₚ[j+1] - βₚ[j]) / Δτ[j]
