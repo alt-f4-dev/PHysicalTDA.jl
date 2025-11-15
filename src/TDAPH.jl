@@ -69,10 +69,10 @@ function persistence_entropy(PDs::Vector{PersistenceDiagrams.PersistenceDiagram}
 	ts = filter(t -> isfinite(t) && t > tol, ts)
 	isempty(ts) && (S[p] = 0.0; E[p] = 0.0; continue)
 	# total persistence & fractional lifetimes 
-        Eₚ = sum(ts); q  = ts ./ Eₚ
+        Eₚ = sum(ts); Tₚ  = ts ./ Eₚ
 	# persistence entropy; add tiny epsilon to avoid log(0) if needed
-	Sₚ  = -sum(@view(q[:]) .* log.(@view(q[:]) .+ eps()))  # natural log
-	S[p] = Sp; E[p] = Eₚ
+	Sₚ  = -sum(@view(Tₚ[:]) .* log.(@view(Tₚ[:]) .+ eps()))  # natural log
+	S[p] = Sₚ; E[p] = Eₚ
     end
     return S, E
 end
