@@ -19,10 +19,10 @@ function pd_array_intensity(A::AbstractArray{<:Real,N};
                 Z = zeros(size(A))
             else
                 A = (A .- amin) ./ (amax - amin)
-                Z = superlevel ? A : 1 .- A
+                Z = superlevel ? 1 .- A : A
             end
     else
-	    Z = superlevel ? A : 1 .- A
+	    Z = superlevel ? -A : A
     end
 	
     PD = ripserer(Cubical(Z); dim_max=maxdim)
