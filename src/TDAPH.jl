@@ -77,6 +77,68 @@ function persistence_entropy(PDs::Vector{PersistenceDiagrams.PersistenceDiagram}
     return S, E
 end
 """
+    persistence_entropy_curve(PDs, τs; dims = 0:1, tol = 0.0)
+
+Filtration-dependent persistence entropy Sₚ(τⱼ) and total truncated persistence Eₚ(τⱼ).
+
+- `PDs`  :: Vector of Ripserer persistence diagrams grouped by homology degree.
+- `τs`   :: sorted vector of filtration parameters (monotone increasing).
+- `dims` :: homology degrees to use (default 0:1).
+- `tol`  :: discard contributions with truncated lifetime ≤ tol.
+
+For each p and τⱼ, lifetimes are truncated as
+    ℓᵢ(τⱼ) = max(0, min(dᵢ, τⱼ) - bᵢ)
+and only ℓᵢ(τⱼ) > tol and finite dᵢ are used.
+
+Returns `(S::Dict{Int,Vector{Float64}}, E::Dict{Int,Vector{Float64}})` keyed by p,
+where S[p][j] = Sₚ(τⱼ), E[p][j] = Eₚ(τⱼ).
+"""
+function persistence_entropy_curve(PDs::Vector{PersistenceDiagrams.PersistenceDiagram}, τs::AbstractVector{<:Real}; dims = 0:1, tol::Real = 0.0)
+    @assert issorted(τs) "τs must be sorted ascending"
+
+    S = Dict{Int,Vector{Float64}}()
+    E = Dict{Int,Vector{Float64}}()
+
+    for p in dims
+        bd = p + 1 <= length(PDs) ? PDs[p + 1] : ()
+        if isempty(bd)
+            S[p] = zeros(Float64, length(τs))
+            E[p] = zeros(Float64, length(τs))
+            continue
+        end
+
+        births = Float64[birth(x) for x in bd]
+        deaths = Float64[death(x) for x in bd]
+
+        Sₚ = zeros(Float64, length(τs))
+        Eₚ = zeros(Float64, length(τs))
+
+        @inbounds for (j, τ) in pairs(τs)
+            ts = Float64[]
+            for (b, d) in zip(births, deaths)
+                isfinite(d) || continue
+                ℓ = min(d, τ) - b
+                ℓ > tol && push!(ts, ℓ)
+            end
+
+            if isempty(ts)
+                Sₚ[j] = 0.0
+                Eₚ[j] = 0.0
+            else
+                Eτ = sum(ts)
+                Tτ  = ts ./ Eτ
+                Sτ = -sum(@view(Tτ[:]) .* log.(@view(Tτ[:])))
+                Sₚ[j] = Sτ
+                Eₚ[j] = Eτ
+            end
+        end
+
+        S[p] = Sₚ
+        E[p] = Eₚ
+    end
+    return S, E
+end
+"""
     betti_curve(PDs, τ; dims = 0:1)
 
 Compute per-dimension Betti curves β_p(τ_j) on a user-provided grid `τ`.
