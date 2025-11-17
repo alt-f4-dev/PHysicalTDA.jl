@@ -1,47 +1,88 @@
 """
-Computes persistance diagrams of an intensity array via cubical complexes.
-Returns PDs with birth–death scatter per dimension, grouped by homology
-degree up to `maxdim`.
+    pd_array_intensities(A; maxdim=1, threshold=0, superlevel=true, normalize=false)
 
-Optional superlevel filtration (invert intensities) and normalization to [0,1].
+Compute persistance diagrams of an intensity array using cubical complex.
+
+Input:
+
+- `A`          :: N₁×N₂ Intensity Array 
+- `maxdim`     :: Sets Maximum Homology Degree `p` 
+- `threshold`  :: Sets Lower/Upper Bound for Superlevel/Sublevel Filtration
+- `superlevel` :: Chooses Filtration Scheme
+- `normalize`  :: Sets Normalization
+
+
+Returns:
+- `PDs` :: Persistence Diagrams `{Dₚ}` for `p ∈ [0, maxdim]`
+
+Each persistence diagram `Dₚ ∈ PDs` contains birth-death pairs of topological features, 
+grouped by homology degree up to `maxdim`. Optional sublevel/superlevel filtration and normalization. 
+
+Threshold values should be given as a percent of the maximum intensity value. For superlevel filtration, 
+features with intensity vales above `threshold * maximum(A)` survive. For sublevel filtration, features 
+with intensity values below `threshold * maximum(A)` survive. If `threshold` is set to `nothing` (default), 
+the full range of intensity is evaluated. 
+
 Used to analyze the topology of I(Q,ω) = |S(Q,ω)|².
 """
-function pd_array_intensity(A::AbstractArray{<:Real,N};
-			    maxdim::Int=1, superlevel::Bool=true, 
-			    normalize::Bool=false) where {N}
-    if any(x -> !isfinite(x), A)
+function pd_array_intensities(A::AbstractArray{<:Real,N};
+                              maxdim::Int=1, 
+                              threshold::Union{Int,Float64,Nothing}=nothing,
+                              superlevel::Bool=true, 
+                              normalize::Bool=false) where {N}
+    if any(x -> !isfinite(x), A) 
         A = map(x -> isfinite(x) ? x : 0.0, A)
     end
-
+    θ = threshold; amin, amax = extrema(A)
     if normalize
-            amin, amax = extrema(A)
-            if amax == amin
-                Z = zeros(size(A))
+        if amax == amin
+            Z = zeros(size(A))
+            τ = 0.0
+        else
+            A = (A .- amin) ./ (amax - amin)
+            Z = superlevel ? 1 .- A : A
+            if !isnothing(θ)
+                τ = superlevel ? 1 - θ : θ
             else
-                A = (A .- amin) ./ (amax - amin)
-                Z = superlevel ? 1 .- A : A
+                τ = maximum(Z)
             end
+        end
     else
-	    Z = superlevel ? -A : A
+	Z = superlevel ? -A : A
+        if !isnothing(θ)
+            Z⁻, Z⁺ = extrema(Z)
+            τ = superlevel ? θ * Z⁻ : θ * Z⁺
+        else
+            τ = maximum(Z)
+        end
     end
-	
-    PD = ripserer(Cubical(Z); dim_max=maxdim)
+    PD = ripserer(Cubical(Z, threshold=τ); dim_max=maxdim)
     return PD
 end
 """
+    pd_sunny_intensities(I; maxdim, threshold, superlevel, normalize)
+
 Wrapper: Sunny.Intensities -> dense Array -> pd_array_intensity
 
 Converts `I.data` to a dense array and calls `pd_array_intensity`.
-Respects `maxdim` and `superlevel`. Returns PD.
+Respects `maxdim`, `threshold`, and `superlevel`. Returns PDs.
 
-Convenient for topology on LSWT or phonon intensity objects.
+Convenient for topology on Sunny LSWT intensity objects.
 """
 function pd_sunny_intensities(I::Sunny.Intensities{T,G,N};
-			    maxdim::Int=1, superlevel::Bool=true, normalize::Bool=true) where {T<:Real,G,N}
+			      maxdim::Int=1, 
+                              threshold::Union{Int, Float64, Nothing}=nothing, 
+                              superlevel::Bool=true, 
+                              normalize::Bool=true) where {T<:Real,G,N}
     A = Array(I.data) # whatever rank Sunny gives here
-    return pd_array_intensity(A; maxdim=maxdim, superlevel=superlevel, normalize=normalize)
+    return pd_array_intensities(A; maxdim=maxdim, 
+                                 superlevel=superlevel, 
+                                 threshold=threshold, 
+                                 normalize=normalize)
 end
 """
+    MAD(t) = 1.48*median.(abs.(t .- median(vec(t))))
+
 Median Absolute Deviation (MAD)
 Applies elementwise relative to the median of `t`. 
 Suitable for thresholding outliers in intensity arrays.
@@ -53,9 +94,9 @@ Returns an array of MAD values with the same shape as `t`.
 
 Compute per-dimension persistence entropy Sₚ and total persistence Eₚ.
 
-- `PDs` is a vector of Ripserer persistence diagrams, grouped by homology degree as returned by `pd_array_intensities()` or `pd_sunny_intensities()`.
-- `dims` selects homology degrees (default 0:1).
-- `tol` discards `lifetimes ≤ tol` (guards numerical noise).
+- `PDs` :: A vector of persistence diagrams, grouped by homology degree `p`.
+- `dims`:: Homology degrees (default 0:1).
+- `tol` :: Discards `lifetimes ≤ tol` (guards numerical noise).
 
 Returns `(S::Dict{Int,Float64}, E::Dict{Int,Float64})` keyed by p.
 """
@@ -143,8 +184,8 @@ end
 
 Compute per-dimension Betti curves β_p(τ_j) on a user-provided grid `τ`.
 
-- `PDs` is a vector of Ripserer PD (grouped by degree).
-- `τ` is a sorted vector of thresholds (monotone increasing).
+- `PDs` :: Vector of Ripserer PD (grouped by degree).
+- `τ`   :: Sorted vector of life-time thresholds (monotone increasing).
 
 Returns `Dict{Int,Vector{Int}}` mapping p ↦ β_p(τ).
 """
