@@ -249,6 +249,251 @@ function betti_curvature(pd, τ::AbstractVector{<:Real}; dims = 0:1, scheme::Sym
     return β, κ
 end
 
+#=========================================#
+# PH-TDA ~ Automatic Multi-Band Tracking  # Note, Sunny.jl outputs (nω × nq) 
+#                                         # Also, persistence homology analyzes Sqω 
+# Sqω :: Matrix{Float64} (nq × nω)        # differently than Sωq.
+# ωs  :: Vector{Float64}                  #  
+#                                         # Sqω seems to be good for phonons, 
+#                                         # while Sωq seems to be good for spins.  
+#=========================================# 
+"""
+    merge_energy_bands!(peaks_sorted::Vector{Int}, ωs; merge_tol = 1.0)
 
+Given a sorted list of peak indices for one q-slice, merge peaks whose
+ω-values differ by less than merge_tol (meV).
 
+Returns a new vector of representative peak indices.
+"""
+function merge_energy_bands!(peaks_sorted::Vector{Int}, ωs; merge_tol = 1.0)
+    isempty(peaks_sorted) && return peaks_sorted
+    merged = Int[]
+    current = peaks_sorted[1]
+    push!(merged, current)
+    for j in 2:length(peaks_sorted)
+        Δω = abs(ωs[peaks_sorted[j]] - ωs[current])
+        if Δω ≤ merge_tol
+            # same physical band → skip
+            continue
+        else
+            # new physical band
+            current = peaks_sorted[j]
+            push!(merged, current)
+        end
+    end
 
+    return merged
+end
+"""
+    splitbands(Iqω, ωs; pers_ratio_min=2.0)
+
+Use 0D PH on each q-slice to estimate the number of significant bands,
+then partition ω into that many bands via peak locations.
+
+Returns bandIq::Matrix{Float64} with size (Nbands, nq) and
+bandIω::Matrix{Float64} with size (Nbands, nω).
+"""
+function splitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real = 2.0)
+    #Note, I(q,ω) splits along ω and I(ω,q) splits along q. 
+    nq, nω = size(Sqω)
+    nbands_local = zeros(Int, nq)
+
+    # ================================================= #
+    #          FIRST PASS: detect # bands at qᵢ         #
+    # ================================================= #
+    #   ∀qᵢ ∃ { bands } ⟺   [ D₀(I) ≠ 0 && {ℓ} ≠ ∅ ]    #
+    #                                                   #
+    # such that I ≡ I(qᵢ, ω) and D₀(I) denotes the      #
+    # persistence diagram for connected components      #
+    # with homological dimension p = 0.                 #
+    #                                                   #
+    #                                                   #
+    # Note, {ℓ} = {ℓ₀, ℓ₁, ℓ₂,...} denotes the set of   #
+    # lifetimes (barcodes) in D₀(I) at qᵢ.              #
+    #                                                   #
+    # The condition (ℓₖ/ℓₖ₊₁) ≥ ρ₀ determines the       #
+    # number of bands, where ρ₀ is a constant value.    #
+    #---------------------------------------------------#
+    for iq in 1:nq
+        spec = @view Sqω[iq, :] #spectral density
+        PD = pd_array_intensities(spec; maxdim=0, superlevel=true,
+                                  threshold=nothing, normalize=false)
+        D0 = PD[1] #persistence diagram
+        if isempty(D0)
+            nbands_local[iq] = 0
+            continue
+        end
+
+        ℓs = Float64[] #lifetimes
+        for x in D0
+            b = birth(x); d = death(x)
+            isfinite(d) && d > b && push!(ℓs, d - b)
+        end
+
+        isempty(ℓs) && (nbands_local[iq] = 0; continue)
+        sort!(ℓs, rev=true)
+        
+        #Count bands
+        if length(ℓs) == 1
+            nbands_local[iq] = 1
+        else
+            ratios = Float64[]
+            for k in 1:length(ℓs)-1
+                ℓs[k+1] > 0 && push!(ratios, ℓs[k] / ℓs[k+1])
+            end
+            if isempty(ratios)
+                nbands_local[iq] = 1
+            else
+                k′ = argmax(ratios)
+                nbands_local[iq] = (ratios[k′] ≥ pers_ratio_min ? k′ : 1)
+            end
+        end
+    end
+
+    # Maximum number of global bands
+    Nbands = maximum(nbands_local)
+    Nbands == 0 && return zeros(Float64, 0, nω)
+
+    # Store the ω-ranges (bands) per q so that we can integrate over q later
+    bands_local = [Vector{UnitRange{Int}}() for _ in 1:nq]
+
+    # ================================================= #
+    #          SECOND PASS: determine ω-ranges          #
+    # ================================================= #
+    #   ∀qᵢ ∃{𝒾} : {𝒾} ≠ ∅ ⟺   ∀𝒾 ∃𝓌  : 𝓌  ∈ [ω⁻, ω⁺]   #
+    #                                                   #
+    # At each qᵢ check if intensity peaks {𝒾} exists.   #
+    # If {𝒾} ≠ ∅, then an energy range 𝓌  must exist    #
+    # such that 𝒾 ∈ 𝓌 . Tesselate the set of intensity  #
+    # peaks {𝒾} using a Voronoi partition.              #
+    #                                                   #
+    # Returns energy ranges {𝓌 } between each peak 𝒾.   #
+    #---------------------------------------------------#
+    for iq in 1:nq
+        spec = Sqω[iq, :]
+        nb = nbands_local[iq]
+        if nb == 0
+            continue
+        end
+
+        # --- peak finding
+        peaks = Int[]
+        for j in 2:nω-1
+            spec[j] ≥ spec[j-1] && spec[j] ≥ spec[j+1] && spec[j] > spec[j-1] && spec[j] > spec[j+2] && push!(peaks, j)
+        end
+
+        if isempty(peaks)
+            # only one band covering all ω
+            bands_local[iq] = [1:nω]
+            continue
+        end
+
+        # choose nb strongest peaks
+        nb = min(nb, length(peaks))
+        sort!(peaks, by = j -> -spec[j])
+        peaks = sort(peaks[1:nb])
+
+        # optional merging step (as in your code)
+        peaks = merge_energy_bands!(peaks, ωs; merge_tol=mean(diff(ωs)))
+        nb = length(peaks)
+
+        # --- Voronoi partition between peaks
+        bounds = Int[]
+        for k in 1:nb-1
+            mid = (peaks[k] + peaks[k+1]) ÷ 2
+            push!(bounds, mid)
+        end
+
+        ranges = UnitRange{Int}[]
+        start = 1
+        for b in bounds
+            push!(ranges, start:b)
+            start = b + 1
+        end
+        push!(ranges, start:nω)
+
+        bands_local[iq] = ranges
+    end
+
+    # ================================================================= #
+    #          THIRD PASS: calculate integrated intensities             #
+    # ================================================================= #
+    #                                                                   #
+    # For each band b and each energy index j:                          #
+    #     bandIω[b,j] = sum over q such that j ∈ band-range(q,b)        #
+    #                                                                   #
+    # For each band b with band-range(q,b) = r:                         #
+    #     bandIq[b,r] = sum(Sqω[qᵢ, r])*Δω                              #
+    #                                                                   #
+    # Generally,                                                        #
+    #           Iᵇ(qₙ) = ∫I(qₙ, ω)dω : ω ∈ band-range                   #
+    #           Iᵇ(ωₙ) = ∫I(q, ωₙ)dq : q ∈ band-range                   #
+    #                                                                   #
+    # Discretely,                                                       #
+    #           Iᵇ(qₙ) = ∑ₘ I(qₙ,ωₘ)⋅Δω                                 #
+    #           Iᵇ(ωₙ) = ∑ₘ I(qₘ,ωₙ)                                    #
+    #-------------------------------------------------------------------#
+
+    # momentum-integrated spectrum
+    bandIω = zeros(Float64, Nbands, nω)
+    # energy-integrated spectrum
+    bandIq = zeros(Float64, Nbands, nq)
+    Δω = ωs[2] - ωs[1]
+    for iq in 1:nq
+        ranges = bands_local[iq]
+        if isempty(ranges)
+            continue
+        end
+        @inbounds for b in 1:length(ranges)
+            r = ranges[b]
+            # energy-integrated sum
+            bandIq[b, iq] = sum(Sqω[iq,r])*Δω
+            @inbounds for j in r
+                # momentum-integrated sum
+                bandIω[b, j] += Sqω[iq, j]
+            end
+        end
+    end
+
+    return (bandIq = bandIq, bandIω = bandIω)
+end
+"""
+    autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
+
+Automatically perform persistence-homology–based band segmentation
+along both energy and momentum axes.
+
+This function applies `splitbands` twice:
+  (1) directly to I(q,ω), yielding bands resolved along ω (energy-first),
+  (2) to the transposed matrix I(ω,q), yielding bands resolved along q
+      (momentum-first).
+
+The results are returned as two named tuples:
+  - splitE : band structure obtained by splitting along ω
+  - splitQ : band structure obtained by splitting along q
+
+Each tuple has the form:
+    (bandIq = ..., bandIω = ...)
+
+where `bandIq` denotes energy-integrated intensities as a function of q,
+and `bandIω` denotes momentum-integrated intensities as a function of ω,
+with index conventions adjusted to maintain physical meaning after
+transposition.
+
+This is intended as a minimal, orientation-agnostic wrapper that enables
+automatic comparison between phonon-like (ω-gapped) and magnon-like
+(q-persistent) spectral structures.
+
+The parameter `pers_ratio_min` controls the persistence-lifetime ratio
+threshold used to infer the number of bands in each slice.
+"""
+function autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
+    #split along ω and q
+    splitω = splitbands(Iqω, ωs; pers_ratio_min=pers_ratio_min)
+    splitq = splitbands(Iqω', ωs; pers_ratio_min=pers_ratio_min)
+    splitω_bandIq = splitω.bandIq; splitω_bandIω = splitω.bandIω
+    splitq_bandIq = splitq.bandIω; splitq_bandIω = splitq.bandIq
+    splitE = (bandIq = splitω_bandIq, bandIω = splitω_bandIω)
+    splitQ = (bandIq = splitq_bandIq, bandIω = splitq_bandIω)
+    return (splitE, splitQ)
+end

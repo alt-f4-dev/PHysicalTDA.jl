@@ -1,7 +1,10 @@
 module PHysicalTDA
 
 #Required Dependencies
-using Sunny, LinearAlgebra, StaticArrays, Ripserer, PersistenceDiagrams, Statistics, Base.Threads
+using Sunny 
+using LinearAlgebra, StaticArrays 
+using Ripserer, PersistenceDiagrams 
+using Statistics, Base.Threads
 
 #Crystals
 export La2CuO4, TMMC 
@@ -10,7 +13,13 @@ export La2CuO4, TMMC
 export LSWT, convert4D, collapse
 
 #Persistence Homology
-export MAD, pd_array_intensities, pd_sunny_intensities, persistence_entropy, persistence_entropy_curve, betti_curve, betti_curvature
+export MAD, pd_array_intensities, pd_sunny_intensities
+
+#Topological Invariants
+export persistence_entropy, persistence_entropy_curve, betti_curve, betti_curvature
+
+#Topologically-Guided Physical Observables
+export autosplitbands, splitbands, merge_energy_bands!
 
 #Internal Submodules 
 include("CrystalDB.jl"); include("LSWTtools.jl"); include("TDAPH.jl")
