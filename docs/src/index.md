@@ -2,7 +2,7 @@
 CurrentModule = PHysicalTDA
 ```
 
-# Phunny
+# PHysicalTDA
 
 Documentation for [PHysicalTDA](https://github.com/alt-f4-dev/PHysicalTDA.jl).
 
@@ -14,15 +14,16 @@ Topological data analysis for neutron scattering datasets.
 
 
 
-```
-using PHysicalTDA
+```julia-repl
+julia> using PHysicalTDA
 
 
 ```
 
 ## Installation
 ```julia-repl
-pkg> add https://github.com/alt-f4-dev/PHysicalTDA.jl
+julia> ]
+(@v1.11) pkg> add https://github.com/alt-f4-dev/PHysicalTDA.jl
 
 ```
 
