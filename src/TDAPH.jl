@@ -352,7 +352,8 @@ function splitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real = 2.
 
     # Maximum number of global bands
     Nbands = maximum(nbands_local)
-    Nbands == 0 && return zeros(Float64, 0, nω)
+    Nbands == 0 && return (bandIq = zeros(Float64, 0, nq), 
+                           bandIω = zeros(Float64, 0, nω))
 
     # Store the ω-ranges (bands) per q so that we can integrate over q later
     bands_local = [Vector{UnitRange{Int}}() for _ in 1:nq]
