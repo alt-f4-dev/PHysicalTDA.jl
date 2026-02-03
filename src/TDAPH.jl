@@ -378,7 +378,7 @@ function splitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real = 2.
 
         # --- peak finding
         peaks = Int[]
-        for j in 2:nω-1
+        for j in 2:nω-2
             spec[j] ≥ spec[j-1] && spec[j] ≥ spec[j+1] && spec[j] > spec[j-1] && spec[j] > spec[j+2] && push!(peaks, j)
         end
 
