@@ -495,5 +495,5 @@ function autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
     splitq_bandIq = splitq.bandIω; splitq_bandIω = splitq.bandIq
     splitE = (bandIq = splitω_bandIq, bandIω = splitω_bandIω)
     splitQ = (bandIq = splitq_bandIq, bandIω = splitq_bandIω)
-    return (splitE, splitQ)
+    return (splitE = splitE, splitQ = splitQ)
 end
