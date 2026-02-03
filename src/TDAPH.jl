@@ -462,7 +462,9 @@ end
     autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
 
 Automatically perform persistence-homology–based band segmentation
-along both energy and momentum axes.
+along both energy and momentum axes. 
+
+You MUST use (q,ω) index ordering or the keys are not physically accurate.
 
 This function applies `splitbands` twice:
   (1) directly to I(q,ω), yielding bands resolved along ω (energy-first),
