@@ -5,9 +5,20 @@ import PersistenceDiagrams: birth, death
 #--------------------------------#
 # Load Crystal and LSWT Spectrum #
 #--------------------------------#
-cryst, sys = La2CuO4(); LCO = LSWT(cryst, sys)
-qpaths = LCO.qpaths; ωaxis = LCO.energies
-qpathIntensities = LCO.intensities
+#Pre-built Crystal Structure
+cryst, sys = La2CuO4() 
+
+#q-paths (wavevector paths)
+H = [[h,0,0] for h in -1:1]; H = Sunny.q_space_path(cryst, H, 500) #convert to
+K = [[0,k,0] for k in -1:1]; K = Sunny.q_space_path(cryst, K, 500) #Sunny type
+L = [[0,0,ℓ] for ℓ in -1:1]; L = Sunny.q_space_path(cryst, L, 500) #for LSWT
+
+#Linear response theory calculation (per path)
+qpaths = [H,K,L]; LCO = LSWT(cryst, sys, qpaths)
+
+#Obtaining Results for L-axis
+path₃ = LCO.qpaths[3]; ωaxis₃ = LCO.energies[3]; 
+IntensityMatrix₃ = LCO.intensities[3]
 
 #------------------------------#
 # Construct 4D Intensity Field #
