@@ -16,8 +16,11 @@ L = [[0,0,ℓ] for ℓ in -1:1]; L = Sunny.q_space_path(cryst, L, 500) #for LSWT
 #Linear response theory calculation (per path)
 qpaths = [H,K,L]; LCO = LSWT(cryst, sys, qpaths)
 
+#Every q-path has the same energy axis
+ωaxis = LCO.energies
+
 #Obtaining Results for L-axis
-path₃ = LCO.qpaths[3]; ωaxis₃ = LCO.energies[3]; 
+path₃ = LCO.qpaths[3]
 IntensityMatrix₃ = LCO.intensities[3]
 
 #------------------------------#
