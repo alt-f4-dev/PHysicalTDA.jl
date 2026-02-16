@@ -5,13 +5,30 @@ using Sunny
 using LinearAlgebra, StaticArrays 
 using Ripserer, PersistenceDiagrams 
 using Statistics, Base.Threads
+using HDF5
 
+#Internal Core
+include("CoreUtils.jl")
+include("DataTypes.jl")
+include("DataUtils.jl")
+
+#Result containers
+export LSWTResults
+
+#File IO
+export saveHDF5, loadHDF5, h5tree
+export @name
+
+
+include("CrystalDB.jl")
 #Crystals
 export La2CuO4, TMMC 
 
+include("LSWTtools.jl")
 #LSWT Tools 
 export LSWT, convert4D, collapse
 
+include("TDAPH.jl")
 #Persistence Homology
 export MAD, pd_array_intensities, pd_sunny_intensities
 
@@ -21,8 +38,6 @@ export persistence_entropy, persistence_entropy_curve, betti_curve, betti_curvat
 #Topologically-Guided Physical Observables
 export autosplitbands, splitbands, merge_energy_bands!
 
-#Internal Submodules 
-include("CrystalDB.jl"); include("LSWTtools.jl"); include("TDAPH.jl")
 
 #Lazy Plotting
 export enable_visuals, plot_persistence_diagram, plot_lifetime_diagram, plot_persistence_entropy, plot_betti_curvature, plot_betti_surface, plot_dataset_overview
@@ -83,9 +98,9 @@ function plot_betti_surface(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
     return Base.invokelatest(TopoViz.plot_betti_surface, args...; kwargs...)
 end
-function plot_data_set_overview(args...; backend::Symbol=:gl, kwargs...)
+function plot_dataset_overview(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return Base.invokelatest(TopoViz.plot_betti_curvature, args...; kwargs...)
+    return Base.invokelatest(TopoViz.plot_dataset_overview, args...; kwargs...)
 end
 
 end #module
