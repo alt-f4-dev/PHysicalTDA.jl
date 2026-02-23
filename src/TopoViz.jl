@@ -20,7 +20,7 @@ export plot_persistence_diagram, plot_lifetime_diagram,
 function plot_persistence_diagram(PD; label::AbstractString="intensity", 
                                       filtration::AbstractString="superlevel",
                                       ndims::Int=2, maxdim::Int=1, 
-                                      title::AbstractString=nothing)
+                                      title::Union{AbstractString,Nothing}=nothing)
     T = isnothing(title) ? "Persistence Diagram: ($filtration filtration on cubical complex of $(ndims)D array" : title
     fig = Figure(size=(720, 720))
     ax = Axis(fig[1,1], xlabel="birth ($label)", ylabel="death ($label)", title=T)
