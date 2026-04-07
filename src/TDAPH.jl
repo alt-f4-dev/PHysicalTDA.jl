@@ -29,7 +29,8 @@ function pd_array_intensities(A::AbstractArray{<:Real,N};
                               maxdim::Int=1, 
                               threshold::Union{Int,Float64,Nothing}=nothing,
                               superlevel::Bool=true, 
-                              normalize::Bool=false) where {N}
+                              normalize::Bool=false,
+                              make_death_finite::Bool=true) where {N}
     if any(x -> !isfinite(x), A) 
         A = map(x -> isfinite(x) ? x : 0.0, A)
     end
@@ -44,7 +45,7 @@ function pd_array_intensities(A::AbstractArray{<:Real,N};
             if !isnothing(θ)
                 τ = superlevel ? 1 - θ : θ
             else
-                τ = maximum(Z)
+                τ = superlevel ? minimum(Z) : maximum(Z)
             end
         end
     else
@@ -53,10 +54,39 @@ function pd_array_intensities(A::AbstractArray{<:Real,N};
             Z⁻, Z⁺ = extrema(Z)
             τ = superlevel ? θ * Z⁻ : θ * Z⁺
         else
-            τ = maximum(Z)
+            τ = superlevel ? minimum(Z) : maximum(Z)
         end
     end
     PD = ripserer(Cubical(Z, threshold=τ); dim_max=maxdim)
+
+    if make_death_finite
+        PD = map(PD) do Δ
+            isempty(Δ) && return Δ
+
+            births = Float64[birth(x) for x in Δ if isfinite(birth(x))]
+            deaths = Float64[death(x) for x in Δ if isfinite(death(x))]
+
+            bmax = isempty(births) ? 0.0 : maximum(births)
+
+            cap = if isempty(deaths)
+                # All deaths are Inf: choose a finite cap above births.
+                bmax + max(1.0, 0.05 * max(abs(bmax), 1.0))
+            else
+                dmax = maximum(deaths)
+                dmax
+            end
+
+            pts = map(Δ) do x
+                b = birth(x)
+                d = death(x)
+                d2 = isfinite(d) ? d : cap
+                (b, max(d2, b))  # keep valid ordering
+            end
+
+            PersistenceDiagrams.PersistenceDiagram(pts)
+        end
+    end
+
     return PD
 end
 """
@@ -73,12 +103,14 @@ function pd_sunny_intensities(I::Sunny.Intensities{T,G,N};
 			      maxdim::Int=1, 
                               threshold::Union{Int, Float64, Nothing}=nothing, 
                               superlevel::Bool=true, 
-                              normalize::Bool=true) where {T<:Real,G,N}
+                              normalize::Bool=true, 
+                              make_death_finite::Bool=true) where {T<:Real,G,N}
     A = Array(I.data) # whatever rank Sunny gives here
     return pd_array_intensities(A; maxdim=maxdim, 
                                  superlevel=superlevel, 
                                  threshold=threshold, 
-                                 normalize=normalize)
+                                 normalize=normalize, 
+                                 make_death_finite=make_death_finite)
 end
 """
     MAD(t) = 1.48*median.(abs.(t .- median(vec(t))))
@@ -88,7 +120,7 @@ Applies elementwise relative to the median of `t`.
 Suitable for thresholding outliers in intensity arrays.
 Returns an array of MAD values with the same shape as `t`.
 """
-@inline MAD(t) = 1.48 .* median.(abs.(t .- median(vec(t))))
+@inline MAD(t) = 1.4826 .* median.(abs.(t .- median(vec(t))))
 """
     persistence_entropy(PDs; dims = 0:1, tol = 0.0)
 
@@ -112,7 +144,7 @@ function persistence_entropy(PDs::Vector{PersistenceDiagrams.PersistenceDiagram}
 	# total persistence & fractional lifetimes 
         Eₚ = sum(ts); Tₚ  = ts ./ Eₚ
 	# persistence entropy; add tiny epsilon to avoid log(0) if needed
-	Sₚ  = -sum(@view(Tₚ[:]) .* log.(@view(Tₚ[:]) .+ eps()))  # natural log
+        Sₚ  = -sum(@view(Tₚ[:]) .* log2.(@view(Tₚ[:]) .+ eps()))  # S(T) = -∑ₚTₚ⋅log₂(Tₚ)
 	S[p] = Sₚ; E[p] = Eₚ
     end
     return S, E
@@ -168,7 +200,7 @@ function persistence_entropy_curve(PDs::Vector{PersistenceDiagrams.PersistenceDi
             else
                 Eτ = sum(ts)
                 Tτ  = ts ./ Eτ
-                Sτ = -sum(@view(Tτ[:]) .* log.(@view(Tτ[:])))
+                Sτ = -sum(@view(Tτ[:]) .* log2.(@view(Tτ[:])))
                 Sₚ[j] = Sτ
                 Eₚ[j] = Eτ
             end
