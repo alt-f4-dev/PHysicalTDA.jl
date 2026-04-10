@@ -45,7 +45,8 @@ function pd_array_intensities(A::AbstractArray{<:Real,N};
             if !isnothing(θ)
                 τ = superlevel ? 1 - θ : θ
             else
-                τ = superlevel ? minimum(Z) : maximum(Z)
+                #τ = superlevel ? minimum(Z) : maximum(Z)
+                τ = maximum(Z)
             end
         end
     else
@@ -54,7 +55,8 @@ function pd_array_intensities(A::AbstractArray{<:Real,N};
             Z⁻, Z⁺ = extrema(Z)
             τ = superlevel ? θ * Z⁻ : θ * Z⁺
         else
-            τ = superlevel ? minimum(Z) : maximum(Z)
+            #τ = superlevel ? minimum(Z) : maximum(Z)
+            τ = maximum(Z)
         end
     end
     PD = ripserer(Cubical(Z, threshold=τ); dim_max=maxdim)
