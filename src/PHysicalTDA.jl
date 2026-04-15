@@ -7,6 +7,12 @@ using Ripserer, PersistenceDiagrams
 using Statistics, Base.Threads
 using HDF5
 
+#Re-exports
+birth = PersistenceDiagrams.birth
+death = PersistenceDiagrams.death
+PersistenceImage = PersistenceDiagrams.PersistenceImage
+export birth, death, PersistenceImage
+
 #Internal Core
 include("CoreUtils.jl")
 include("DataTypes.jl")
