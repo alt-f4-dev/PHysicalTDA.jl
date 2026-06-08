@@ -41,8 +41,15 @@ export MAD, pd_array_intensities, pd_sunny_intensities
 #Topological Invariants
 export persistence_entropy, persistence_entropy_curve, betti_curve, betti_curvature
 
-#Topologically-Guided Physical Observables
-export autosplitbands, splitbands, merge_energy_bands!
+#Topologically-Guided Physical Observables (Naive)
+export autosplitbands, naivesplitbands, merge_energy_bands!
+
+include("BandSegmentation.jl") #Physical Bands
+export ComponentResult, RidgeNode, RidgeCycleCandidate, RidgeTopologyResult
+export components_to_band_marginals, splitbands
+
+include("Complex.jl")
+export PeriodicCubical
 
 
 #Lazy Plotting

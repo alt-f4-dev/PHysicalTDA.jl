@@ -327,7 +327,7 @@ then partition ω into that many bands via peak locations.
 Returns bandIq::Matrix{Float64} with size (Nbands, nq) and
 bandIω::Matrix{Float64} with size (Nbands, nω).
 """
-function splitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real = 2.0)
+function naivesplitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real = 2.0)
     #Note, I(q,ω) splits along ω and I(ω,q) splits along q. 
     nq, nω = size(Sqω)
     nbands_local = zeros(Int, nq)
@@ -526,8 +526,8 @@ threshold used to infer the number of bands in each slice.
 """
 function autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
     #split along ω and q
-    splitω = splitbands(Iqω, ωs; pers_ratio_min=pers_ratio_min)
-    splitq = splitbands(Iqω', ωs; pers_ratio_min=pers_ratio_min)
+    splitω = naivesplitbands(Iqω, ωs; pers_ratio_min=pers_ratio_min)
+    splitq = naivesplitbands(Iqω', ωs; pers_ratio_min=pers_ratio_min)
     splitω_bandIq = splitω.bandIq; splitω_bandIω = splitω.bandIω
     splitq_bandIq = splitq.bandIω; splitq_bandIω = splitq.bandIq
     splitE = (bandIq = splitω_bandIq, bandIω = splitω_bandIω)
