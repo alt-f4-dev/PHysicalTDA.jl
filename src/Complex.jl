@@ -13,7 +13,7 @@
 #   pd_array_intensities(Z; periodic_dims=nothing, ...)
 #
 # Dependencies: Ripserer (loaded by parent module)
-#--------------------------------------------------------------------
+#-------------------------------------------------------------------- IN DEVELOPMENT!!
 
 #------------------------------------------------#
 #  Section 1: parse periodic_dims specification  #
@@ -231,74 +231,74 @@ function _cube_corners(
 end
 
 #----------------------------------------------#
-#  Section 5: PHysicalTDA.jl integration       #
+#  Section 5: PHysicalTDA.jl integration       # Broken
 #----------------------------------------------#
 
-"""
-    pd_array_intensities(Z::AbstractMatrix{<:Real}; kwargs...)
 
-Compute persistent homology of the 2D intensity array `Z`.
+#    pd_array_intensities(Z::AbstractMatrix{<:Real}; kwargs...)
+#
+#Compute persistent homology of the 2D intensity array `Z`.
 
 # Keywords
-- `maxdim::Int = 1`: maximum homological dimension.
-- `threshold::Real`: filtration cutoff (default: maximum of `Z`).
-- `superlevel::Bool = false`: negate `Z` for superlevel filtration.
-- `normalize::Bool = false`: scale `Z` to [0,1] before filtration.
-- `periodic_dims`: `nothing` (default, standard `Cubical`), `NTuple{K,Bool}`
-  mask, or iterable of periodic axis indices.
+#- `maxdim::Int = 1`: maximum homological dimension.
+#- `threshold::Real`: filtration cutoff (default: maximum of `Z`).
+#- `superlevel::Bool = false`: negate `Z` for superlevel filtration.
+#- `normalize::Bool = false`: scale `Z` to [0,1] before filtration.
+#- `periodic_dims`: `nothing` (default, standard `Cubical`), `NTuple{K,Bool}`
+#  mask, or iterable of periodic axis indices.
 
-# Returns
-`Vector{PersistenceDiagram}` of length `maxdim + 1`.
-"""
-function pd_array_intensities(
-    Z::AbstractMatrix{<:Real};
-    maxdim::Int      = 1,
-    threshold        = nothing,
-    superlevel::Bool = false,
-    normalize::Bool  = false,
-    periodic_dims    = nothing,
-)
-    arr = Float64.(Z)
+## Returns
+#`Vector{PersistenceDiagram}` of length `maxdim + 1`.
 
-    if normalize
-        lo, hi = extrema(arr)
-        span   = hi - lo
-        arr    = span > 0 ? (arr .- lo) ./ span : arr .- lo
-    end
-
-    superlevel && (arr = -arr)
-
-    τ  = isnothing(threshold) ? maximum(arr) : Float64(threshold)
-    cf = isnothing(periodic_dims) ? Cubical(arr; threshold = τ) :
-                                    PeriodicCubical(arr; periodic_dims = periodic_dims,
-                                                        threshold = τ)
-
-    return collect(ripserer(cf; dim_max = maxdim))
-end
-
-# N-dimensional overload
-function pd_array_intensities(
-    Z::AbstractArray{<:Real,N};
-    maxdim::Int      = 1,
-    threshold        = nothing,
-    superlevel::Bool = false,
-    normalize::Bool  = false,
-    periodic_dims    = nothing,
-) where N
-    arr = Float64.(Z)
-
-    if normalize
-        lo, hi = extrema(arr)
-        span   = hi - lo
-        arr    = span > 0 ? (arr .- lo) ./ span : arr .- lo
-    end
-
-    superlevel && (arr = -arr)
-
-    τ  = isnothing(threshold) ? maximum(arr) : Float64(threshold)
-    cf = isnothing(periodic_dims) ? Cubical(arr; threshold = τ) :
-                                    PeriodicCubical(arr; periodic_dims = periodic_dims,
-                                                        threshold = τ)
-
-    return collect(ripserer(cf; dim_max = maxdim))
-end
+#function pd_array_intensities(
+#    Z::AbstractMatrix{<:Real};
+#    maxdim::Int      = 1,
+#    threshold        = nothing,
+#    superlevel::Bool = false,
+#    normalize::Bool  = false,
+#    periodic_dims    = nothing,
+#)
+#    arr = Float64.(Z)
+#
+#    if normalize
+#        lo, hi = extrema(arr)
+#        span   = hi - lo
+#        arr    = span > 0 ? (arr .- lo) ./ span : arr .- lo
+#    end
+#
+#    superlevel && (arr = -arr)
+#
+#    τ  = isnothing(threshold) ? maximum(arr) : Float64(threshold)
+#    cf = isnothing(periodic_dims) ? Cubical(arr; threshold = τ) :
+#                                    PeriodicCubical(arr; periodic_dims = periodic_dims,
+#                                                        threshold = τ)
+#
+#    return collect(ripserer(cf; dim_max = maxdim))
+#end
+#
+## N-dimensional overload
+#function pd_array_intensities(
+#    Z::AbstractArray{<:Real,N};
+#    maxdim::Int      = 1,
+#    threshold        = nothing,
+#    superlevel::Bool = false,
+#    normalize::Bool  = false,
+#    periodic_dims    = nothing,
+#) where N
+#    arr = Float64.(Z)
+#
+#    if normalize
+#        lo, hi = extrema(arr)
+#        span   = hi - lo
+#        arr    = span > 0 ? (arr .- lo) ./ span : arr .- lo
+#    end
+#
+#    superlevel && (arr = -arr)
+#
+#    τ  = isnothing(threshold) ? maximum(arr) : Float64(threshold)
+#    cf = isnothing(periodic_dims) ? Cubical(arr; threshold = τ) :
+#                                    PeriodicCubical(arr; periodic_dims = periodic_dims,
+#                                                        threshold = τ)
+#
+#    return collect(ripserer(cf; dim_max = maxdim))
+#end
