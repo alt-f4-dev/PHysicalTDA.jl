@@ -46,10 +46,15 @@ export autosplitbands, naivesplitbands, merge_energy_bands!
 
 include("BandSegmentation.jl") #Physical Bands
 export ComponentResult, RidgeNode, RidgeCycleCandidate, RidgeTopologyResult
+export adaptive_autosplitbands2d, build_ridge_topology
 export components_to_band_marginals, splitbands
 
-include("Complex.jl")
-export PeriodicCubical
+include("BandTopology.jl")
+export restrict_to_domain
+export domain_marginals
+export robust_branch_count
+export analyze_domain_topologies
+export summarize_domain_branches
 
 
 #Lazy Plotting

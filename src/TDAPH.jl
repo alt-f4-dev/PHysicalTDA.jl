@@ -527,7 +527,7 @@ threshold used to infer the number of bands in each slice.
 function autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
     #split along ω and q
     splitω = naivesplitbands(Iqω, ωs; pers_ratio_min=pers_ratio_min)
-    splitq = naivesplitbands(Iqω', ωs; pers_ratio_min=pers_ratio_min)
+    splitq = naivesplitbands(Iqω', qs; pers_ratio_min=pers_ratio_min)
     splitω_bandIq = splitω.bandIq; splitω_bandIω = splitω.bandIω
     splitq_bandIq = splitq.bandIω; splitq_bandIω = splitq.bandIq
     splitE = (bandIq = splitω_bandIq, bandIω = splitω_bandIω)
