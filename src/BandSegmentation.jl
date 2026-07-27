@@ -1942,3 +1942,18 @@ function splitbands(Iqω::AbstractMatrix{<:Real}, qs, ωs; kwargs...)
     result = adaptive_autosplitbands2d(Iqω, qs, ωs; kwargs...)
     return components_to_band_marginals(result)
 end
+
+function ridge_dispersions(Iqω::AbstractMatrix{<:Real}, qs, ωs; kwargs...)
+    result = adaptive_autosplitbands2d(Iqω, qs, ωs; kwargs...)
+    centers = result.qfirst.centers
+    nparents, nq = size(centers)
+
+    dispersions = Matrix{Float64}(undef, nparents, nq)
+    @inbounds for b in 1:nparents, iq in 1:nq
+        dispersions[b, iq] = Float64(ωs[centers[b, iq]])
+    end
+
+    return (q = Float64.(qs), ω = dispersions,
+            center_indices = copy(centers),
+            imputed = copy(result.qfirst.imputed))
+end
