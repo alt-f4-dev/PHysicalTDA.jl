@@ -524,13 +524,79 @@ automatic comparison between phonon-like (ω-gapped) and magnon-like
 The parameter `pers_ratio_min` controls the persistence-lifetime ratio
 threshold used to infer the number of bands in each slice.
 """
-function autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
+#function autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
     #split along ω and q
+#    splitω = naivesplitbands(Iqω, ωs; pers_ratio_min=pers_ratio_min)
+#    splitq = naivesplitbands(Iqω', qs; pers_ratio_min=pers_ratio_min)
+#    splitω_bandIq = splitω.bandIq; splitω_bandIω = splitω.bandIω
+#    splitq_bandIq = splitq.bandIω; splitq_bandIω = splitq.bandIq
+#    splitE = (bandIq = splitω_bandIq, bandIω = splitω_bandIω)
+#    splitQ = (bandIq = splitq_bandIq, bandIω = splitq_bandIω)
+#    return (splitE = splitE, splitQ = splitQ)
+#end
+
+
+
+#DEVELOPMENT
+"""
+    autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
+
+Perform the legacy naive band segmentation along both matrix orientations.
+
+This backward-compatible two-argument method uses a uniform index-space
+momentum axis for the momentum-first segmentation. Use the three-argument
+method when an explicit momentum coordinate vector is available.
+"""
+function autosplitbands(Iqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real=2.0)
+    nq, nω = size(Iqω)
+
+    nq ≥ 2 || throw(ArgumentError("autosplitbands requires at least two momentum samples; got nq=$nq."))
+
+    nω ≥ 2 || throw(ArgumentError("autosplitbands requires at least two energy samples; got nω=$nω."))
+
+    length(ωs) == nω || throw(DimensionMismatch("Energy-axis length $(length(ωs)) does not match " *
+                                                "the I(q,ω) column count nω=$nω."))
+
+    # The legacy naive route is index based. A uniform index axis preserves
+    # the momentum-grid topology without requiring a physical q coordinate.
+    qs_index = collect(1.0:nq)
+
+    return autosplitbands(Iqω, qs_index, ωs; pers_ratio_min=pers_ratio_min)
+end
+
+
+"""
+    autosplitbands(Iqω, qs, ωs; pers_ratio_min=2.0)
+
+Perform legacy naive band segmentation along both energy and momentum
+orientations using explicit momentum and energy coordinate vectors.
+"""
+function autosplitbands(Iqω::AbstractMatrix{<:Real}, qs, ωs; pers_ratio_min::Real=2.0)
+    nq, nω = size(Iqω)
+
+    nq ≥ 2 || throw(ArgumentError("autosplitbands requires at least two momentum samples; got nq=$nq."))
+
+    nω ≥ 2 || throw(ArgumentError("autosplitbands requires at least two energy samples; got nω=$nω."))
+
+    length(qs) == nq || throw(DimensionMismatch("Momentum-axis length $(length(qs)) does not match " *
+                                                "the I(q,ω) row count nq=$nq."))
+
+    length(ωs) == nω || throw(DimensionMismatch("Energy-axis length $(length(ωs)) does not match " *
+                                                "the I(q,ω) column count nω=$nω."))
+
+    # Energy-first segmentation:
+    # rows correspond to q, columns correspond to ω.
     splitω = naivesplitbands(Iqω, ωs; pers_ratio_min=pers_ratio_min)
-    splitq = naivesplitbands(Iqω', qs; pers_ratio_min=pers_ratio_min)
-    splitω_bandIq = splitω.bandIq; splitω_bandIω = splitω.bandIω
-    splitq_bandIq = splitq.bandIω; splitq_bandIω = splitq.bandIq
-    splitE = (bandIq = splitω_bandIq, bandIω = splitω_bandIω)
-    splitQ = (bandIq = splitq_bandIq, bandIω = splitq_bandIω)
+
+    # Momentum-first segmentation:
+    # after transposition, columns correspond to q, so qs is the correct
+    # coordinate vector for naivesplitbands.
+    splitq = naivesplitbands(permutedims(Iqω), qs; pers_ratio_min=pers_ratio_min)
+
+    splitE = (bandIq = splitω.bandIq, bandIω = splitω.bandIω)
+
+    # Restore the original physical naming after transposition.
+    splitQ = (bandIq = splitq.bandIω, bandIω = splitq.bandIq)
+
     return (splitE = splitE, splitQ = splitQ)
 end
