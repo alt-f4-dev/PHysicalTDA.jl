@@ -319,16 +319,17 @@ function merge_energy_bands!(peaks_sorted::Vector{Int}, ωs; merge_tol = 1.0)
     return merged
 end
 """
-    splitbands(Iqω, ωs; pers_ratio_min=2.0)
+    naivesplitbands(Sqω, ωs; pers_ratio_min=2.0, row_spacing=1.0)
 
-Use 0D PH on each q-slice to estimate the number of significant bands,
-then partition ω into that many bands via peak locations.
+Partition each row of `Sqω` along the column-coordinate grid `ωs` using 0D persistent homology. Return `(bandIq, bandIω)` with dimensions `(Nbands, size(Sqω,1))` and `(Nbands, size(Sqω,2))`, respectively.
 
-Returns bandIq::Matrix{Float64} with size (Nbands, nq) and
-bandIω::Matrix{Float64} with size (Nbands, nω).
+`bandIq` integrates over columns with `Δω = ωs[2] - ωs[1]` (unchanged). `bandIω` integrates over rows with the optional `row_spacing` factor. The default `row_spacing=1.0` reproduces the historical unweighted row sum.
+
+For physical integration, use uniformly spaced coordinates with a positive row spacing; `autosplitbands(...; grid_weighting=:physical)` validates both grids.
 """
-function naivesplitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real = 2.0)
-    #Note, I(q,ω) splits along ω and I(ω,q) splits along q. 
+function naivesplitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real=2.0, row_spacing::Real=1.0)
+    isfinite(row_spacing) && row_spacing > 0 || throw(ArgumentError("row_spacing must be finite and positive; got $row_spacing."))
+    # Rows and columns exchange their physical interpretation after transposition.
     nq, nω = size(Sqω)
     nbands_local = zeros(Int, nq)
 
@@ -466,7 +467,7 @@ function naivesplitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real
     #                                                                   #
     # Discretely,                                                       #
     #           Iᵇ(qₙ) = ∑ₘ I(qₙ,ωₘ)⋅Δω                                 #
-    #           Iᵇ(ωₙ) = ∑ₘ I(qₘ,ωₙ)                                    #
+    #           Iᵇ(ωₙ) = ∑ₘ I(qₘ,ωₙ)⋅row_spacing                        #
     #-------------------------------------------------------------------#
 
     # momentum-integrated spectrum
@@ -485,7 +486,7 @@ function naivesplitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real
             bandIq[b, iq] = sum(Sqω[iq,r])*Δω
             @inbounds for j in r
                 # momentum-integrated sum
-                bandIω[b, j] += Sqω[iq, j]
+                bandIω[b, j] += Sqω[iq, j] * row_spacing
             end
         end
     end
@@ -493,61 +494,14 @@ function naivesplitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real
     return (bandIq = bandIq, bandIω = bandIω)
 end
 """
-    autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
+    autosplitbands(Iqω, ωs; pers_ratio_min=2.0, grid_weighting=:legacy)
 
-Automatically perform persistence-homology–based band segmentation
-along both energy and momentum axes. 
+Perform naive segmentation along both orientations using an index-space momentum axis. The default `:legacy` preserves historical numerical outputs.
 
-You MUST use (q,ω) index ordering or the keys are not physically accurate.
-
-This function applies `splitbands` twice:
-  (1) directly to I(q,ω), yielding bands resolved along ω (energy-first),
-  (2) to the transposed matrix I(ω,q), yielding bands resolved along q
-      (momentum-first).
-
-The results are returned as two named tuples:
-  - splitE : band structure obtained by splitting along ω
-  - splitQ : band structure obtained by splitting along q
-
-Each tuple has the form:
-    (bandIq = ..., bandIω = ...)
-
-where `bandIq` denotes energy-integrated intensities as a function of q,
-and `bandIω` denotes momentum-integrated intensities as a function of ω,
-with index conventions adjusted to maintain physical meaning after
-transposition.
-
-This is intended as a minimal, orientation-agnostic wrapper that enables
-automatic comparison between phonon-like (ω-gapped) and magnon-like
-(q-persistent) spectral structures.
-
-The parameter `pers_ratio_min` controls the persistence-lifetime ratio
-threshold used to infer the number of bands in each slice.
+Physical weighting requires explicit momentum coordinates via the three-argument method and is rejected here rather than assuming a momentum spacing.
 """
-#function autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
-    #split along ω and q
-#    splitω = naivesplitbands(Iqω, ωs; pers_ratio_min=pers_ratio_min)
-#    splitq = naivesplitbands(Iqω', qs; pers_ratio_min=pers_ratio_min)
-#    splitω_bandIq = splitω.bandIq; splitω_bandIω = splitω.bandIω
-#    splitq_bandIq = splitq.bandIω; splitq_bandIω = splitq.bandIq
-#    splitE = (bandIq = splitω_bandIq, bandIω = splitω_bandIω)
-#    splitQ = (bandIq = splitq_bandIq, bandIω = splitq_bandIω)
-#    return (splitE = splitE, splitQ = splitQ)
-#end
-
-
-
-#DEVELOPMENT
-"""
-    autosplitbands(Iqω, ωs; pers_ratio_min=2.0)
-
-Perform the legacy naive band segmentation along both matrix orientations.
-
-This backward-compatible two-argument method uses a uniform index-space
-momentum axis for the momentum-first segmentation. Use the three-argument
-method when an explicit momentum coordinate vector is available.
-"""
-function autosplitbands(Iqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real=2.0)
+function autosplitbands(Iqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real=2.0, grid_weighting::Symbol=:legacy)
+    grid_weighting === :legacy || throw(ArgumentError("The two-argument autosplitbands method supports only grid_weighting=:legacy; supply qs and ωs for :physical."))
     nq, nω = size(Iqω)
 
     nq ≥ 2 || throw(ArgumentError("autosplitbands requires at least two momentum samples; got nq=$nq."))
@@ -565,13 +519,27 @@ function autosplitbands(Iqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real=
 end
 
 
-"""
-    autosplitbands(Iqω, qs, ωs; pers_ratio_min=2.0)
+function _uniform_grid_spacing(coords, label::AbstractString)
+    length(coords) >= 2 || throw(ArgumentError("$label grid requires at least two coordinates."))
+    all(x -> x isa Real && isfinite(x), coords) || throw(ArgumentError("$label grid must contain finite real coordinates."))
+    steps = diff(coords)
+    all(x -> x > 0, steps) || throw(ArgumentError("$label grid must be strictly increasing."))
+    spacing = Float64(steps[1])
+    all(x -> isapprox(x, spacing; rtol=1e-8, atol=32 * eps(spacing)), steps) ||
+        throw(ArgumentError("$label grid must be uniformly spaced for grid_weighting=:physical."))
+    return spacing
+end
 
-Perform legacy naive band segmentation along both energy and momentum
-orientations using explicit momentum and energy coordinate vectors.
+
 """
-function autosplitbands(Iqω::AbstractMatrix{<:Real}, qs, ωs; pers_ratio_min::Real=2.0)
+    autosplitbands(Iqω, qs, ωs; pers_ratio_min=2.0, grid_weighting=:legacy)
+
+Compute naive band segmentation with explicit momentum `qs` and energy `ωs` coordinates. `grid_weighting=:legacy` preserves historical marginal amplitudes.
+
+With `grid_weighting=:physical`, each marginal is integrated using the spacing of its summed coordinate, as in Eqs. (7)–(8) of the manuscript. Physical mode requires strictly increasing, finite, uniformly spaced coordinate grids.
+"""
+function autosplitbands(Iqω::AbstractMatrix{<:Real}, qs, ωs; pers_ratio_min::Real=2.0, grid_weighting::Symbol=:legacy)
+    grid_weighting in (:legacy, :physical) || throw(ArgumentError("grid_weighting must be :legacy or :physical; got $grid_weighting."))
     nq, nω = size(Iqω)
 
     nq ≥ 2 || throw(ArgumentError("autosplitbands requires at least two momentum samples; got nq=$nq."))
@@ -584,14 +552,12 @@ function autosplitbands(Iqω::AbstractMatrix{<:Real}, qs, ωs; pers_ratio_min::R
     length(ωs) == nω || throw(DimensionMismatch("Energy-axis length $(length(ωs)) does not match " *
                                                 "the I(q,ω) column count nω=$nω."))
 
-    # Energy-first segmentation:
-    # rows correspond to q, columns correspond to ω.
-    splitω = naivesplitbands(Iqω, ωs; pers_ratio_min=pers_ratio_min)
+    Δq = grid_weighting === :physical ? _uniform_grid_spacing(qs, "Momentum") : 1.0
+    Δω = grid_weighting === :physical ? _uniform_grid_spacing(ωs, "Energy") : 1.0
 
-    # Momentum-first segmentation:
-    # after transposition, columns correspond to q, so qs is the correct
-    # coordinate vector for naivesplitbands.
-    splitq = naivesplitbands(permutedims(Iqω), qs; pers_ratio_min=pers_ratio_min)
+    # Each call weights its rows by the other coordinate's physical spacing.
+    splitω = naivesplitbands(Iqω, ωs; pers_ratio_min=pers_ratio_min, row_spacing=Δq)
+    splitq = naivesplitbands(permutedims(Iqω), qs; pers_ratio_min=pers_ratio_min, row_spacing=Δω)
 
     splitE = (bandIq = splitω.bandIq, bandIω = splitω.bandIω)
 
