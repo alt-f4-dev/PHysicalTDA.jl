@@ -96,29 +96,33 @@ end
 @inline _ensure_viz(; backend::Symbol=:gl) = (_viz_loaded[] || enable_visuals(backend=backend))
 
 #Lazy Plot Entry Point
+# TopoViz is defined at runtime by enable_visuals, so resolve it in the latest
+# world (inside invokelatest) rather than in the caller's world.
+_viz_call(name::Symbol, args...; kwargs...) =
+    getglobal(getglobal(@__MODULE__, :TopoViz), name)(args...; kwargs...)
 function plot_persistence_diagram(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return Base.invokelatest(TopoViz.plot_persistence_diagram, args...; kwargs...)
+    return Base.invokelatest(_viz_call, :plot_persistence_diagram, args...; kwargs...)
 end
 function plot_lifetime_diagram(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return Base.invokelatest(TopoViz.plot_lifetime_diagram, args...; kwargs...)
+    return Base.invokelatest(_viz_call, :plot_lifetime_diagram, args...; kwargs...)
 end
 function plot_persistence_entropy(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return Base.invokelatest(TopoViz.plot_persistence_entropy, args...; kwargs...)
+    return Base.invokelatest(_viz_call, :plot_persistence_entropy, args...; kwargs...)
 end
 function plot_betti_curvature(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return Base.invokelatest(TopoViz.plot_betti_curvature, args...; kwargs...)
+    return Base.invokelatest(_viz_call, :plot_betti_curvature, args...; kwargs...)
 end
 function plot_betti_surface(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return Base.invokelatest(TopoViz.plot_betti_surface, args...; kwargs...)
+    return Base.invokelatest(_viz_call, :plot_betti_surface, args...; kwargs...)
 end
 function plot_dataset_overview(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
-    return Base.invokelatest(TopoViz.plot_dataset_overview, args...; kwargs...)
+    return Base.invokelatest(_viz_call, :plot_dataset_overview, args...; kwargs...)
 end
 
 end #module
