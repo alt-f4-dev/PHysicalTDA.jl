@@ -539,6 +539,24 @@ end
 #--------------#
 # Result Types #
 #--------------#
+"""
+    ComponentResult
+
+One retained connected support component of a parent band.
+
+- `weight`  :: plain sum `Σ I(qᵢ, ωⱼ)` over the component pixels (no `ΔqΔω`
+  factor). The integrated weight of the manuscript, `W = Σ I Δq Δω`, is
+  `weight * mean(diff(qs)) * mean(diff(ωs))`. Relative weights are unaffected.
+- `bandIq`  :: `Σⱼ I(qᵢ, ωⱼ) Δω` over component pixels (energy-integrated).
+- `bandIω`  :: `Σᵢ I(qᵢ, ωⱼ) Δq` over component pixels (momentum-integrated).
+- `qinds`, `ωinds` :: bounding-box index ranges; `linear_indices` gives exact
+  pixel membership.
+
+Supports are thresholded cores of each band, so marginals summed over the
+components of a parent retain only part of the band's total spectral weight
+(roughly 70% for isolated, noise-free Lorentzian bands with the default
+support settings).
+"""
 struct ComponentResult
     parent_band::Int
     component::Int
@@ -579,6 +597,19 @@ struct RidgeCycleCandidate
     reason::String
 end
 
+"""
+    RidgeTopologyResult
+
+Ridge-graph diagnostics returned by [`build_ridge_topology`](@ref).
+
+- `beta0` :: number of connected components of the ridge node graph
+  (graph first Betti number b₀).
+- `beta1` :: number of **accepted split–merge events** (equal to
+  `accepted_cycle_count`). This is not the cycle rank of the graph: the
+  split–merge rescue adds closure edges, so one physical lens can produce a
+  graph cycle rank greater than 1. The raw graph cycle rank
+  `E − V + b₀` is stored in `diagnostics[:raw_beta1]`.
+"""
 struct RidgeTopologyResult
     nodes::Vector{RidgeNode}
     edges::Vector{Tuple{Int,Int}}
@@ -1755,6 +1786,19 @@ Key options include `periodic_q`, `resolution_q`, `resolution_ω`,
 `parent_count_method`, `max_bands`, `pixel_adjacency`, and `ridge_*` controls.
 Use `pixel_adjacency=:edge` for edge-sharing support and `:full` for the
 full 3×3 neighborhood excluding the center pixel.
+
+`qs` and `ωs` may be any real vectors, including ranges.
+
+!!! note "Periodic momentum axis"
+    `periodic_q=true` (default) wraps the first and last momentum rows in
+    smoothing, centre imputation, gap repair and component labelling. This is
+    appropriate only when `qs` spans a full period of reciprocal space. For a
+    partial cut (e.g. `h ∈ [0, 0.4]`) or for `|Q|` data, pass
+    `periodic_q=false`. The ridge graph uses `ridge_periodic_q`, which defaults
+    to `false` independently.
+
+`ridge_beta1` in the result counts accepted split–merge events, not the
+graph cycle rank; see [`RidgeTopologyResult`](@ref).
 """
 function adaptive_autosplitbands2d(Iqω_in::AbstractMatrix{<:Real}, qs, ωs;
                                    periodic_q::Bool=true,
