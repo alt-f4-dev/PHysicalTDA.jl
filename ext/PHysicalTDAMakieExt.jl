@@ -1,15 +1,9 @@
-module TopoViz
+module PHysicalTDAMakieExt
+# Plotting for PHysicalTDA, loaded automatically when Makie is loaded.
+# Called through the lazy wrappers `PHysicalTDA.plot_*`.
 
-using Makie #Lazy Plot
-
-#import functions
-using ..PHysicalTDA: betti_curve
-using Ripserer: birth, death
-
-#export plotting utils (non-mutatint)
-export plot_persistence_diagram, plot_lifetime_diagram,
-       plot_betti_curvature, plot_persistence_entropy, 
-       plot_betti_surface, plot_dataset_overview
+using Makie
+using PHysicalTDA: betti_curve, birth, death
 
 
 #export plotting utils (mutating)
