@@ -398,13 +398,13 @@ function _persistent_peak_indices(spec::AbstractVector{<:Real}, nb::Integer)
     return sort!(idx)
 end
 """
-    naivesplitbands(Sqω, ωs; pers_ratio_min=2.0, row_spacing=1.0, peak_selection=:height)
+    slice_partition_marginals(Sqω, ωs; pers_ratio_min=2.0, row_spacing=1.0, peak_selection=:height)
 
-Partition each row of `Sqω` along the column-coordinate grid `ωs` using 0D persistent homology. Return `(bandIq, bandIω)` with dimensions `(Nbands, size(Sqω,1))` and `(Nbands, size(Sqω,2))`, respectively.
+Partition each row of `Sqω` along the column-coordinate grid `ωs` using 0D persistent homology. Formerly `naivesplitbands`, which remains an alias. Return `(bandIq, bandIω)` with dimensions `(Nbands, size(Sqω,1))` and `(Nbands, size(Sqω,2))`, respectively.
 
 `bandIq` integrates over columns with `Δω = ωs[2] - ωs[1]` (unchanged). `bandIω` integrates over rows with the optional `row_spacing` factor. The default `row_spacing=1.0` reproduces the historical unweighted row sum.
 
-For physical integration, use uniformly spaced coordinates with a positive row spacing; `autosplitbands(...; grid_weighting=:physical)` validates both grids.
+For physical integration, use uniformly spaced coordinates with a positive row spacing; `partition_marginals(...; grid_weighting=:physical)` validates both grids.
 
 # What the partition counts
 
@@ -433,7 +433,7 @@ manuscript benchmark and is preserved by default.
   strong band are not chosen over a weaker but persistent band. The local
   count `k` is unchanged.
 """
-function naivesplitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real=2.0, row_spacing::Real=1.0,
+function slice_partition_marginals(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real=2.0, row_spacing::Real=1.0,
                          peak_selection::Symbol=:height)
     isfinite(row_spacing) && row_spacing > 0 || throw(ArgumentError("row_spacing must be finite and positive; got $row_spacing."))
     peak_selection in (:height, :persistence) ||
@@ -609,20 +609,20 @@ function naivesplitbands(Sqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real
     return (bandIq = bandIq, bandIω = bandIω)
 end
 """
-    autosplitbands(Iqω, ωs; pers_ratio_min=2.0, grid_weighting=:legacy, peak_selection=:height)
+    partition_marginals(Iqω, ωs; pers_ratio_min=2.0, grid_weighting=:legacy, peak_selection=:height)
 
-Perform naive segmentation along both orientations using an index-space momentum axis. The default `:legacy` preserves historical numerical outputs. `peak_selection` is forwarded to [`naivesplitbands`](@ref).
+Apply [`slice_partition_marginals`](@ref) in both orientations using an index-space momentum axis. Formerly `autosplitbands`, which remains an alias. The default `:legacy` preserves historical numerical outputs. `peak_selection` is forwarded to [`slice_partition_marginals`](@ref).
 
 Physical weighting requires explicit momentum coordinates via the three-argument method and is rejected here rather than assuming a momentum spacing.
 """
-function autosplitbands(Iqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real=2.0, grid_weighting::Symbol=:legacy,
+function partition_marginals(Iqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real=2.0, grid_weighting::Symbol=:legacy,
                         peak_selection::Symbol=:height)
-    grid_weighting === :legacy || throw(ArgumentError("The two-argument autosplitbands method supports only grid_weighting=:legacy; supply qs and ωs for :physical."))
+    grid_weighting === :legacy || throw(ArgumentError("The two-argument partition_marginals method supports only grid_weighting=:legacy; supply qs and ωs for :physical."))
     nq, nω = size(Iqω)
 
-    nq ≥ 2 || throw(ArgumentError("autosplitbands requires at least two momentum samples; got nq=$nq."))
+    nq ≥ 2 || throw(ArgumentError("partition_marginals requires at least two momentum samples; got nq=$nq."))
 
-    nω ≥ 2 || throw(ArgumentError("autosplitbands requires at least two energy samples; got nω=$nω."))
+    nω ≥ 2 || throw(ArgumentError("partition_marginals requires at least two energy samples; got nω=$nω."))
 
     length(ωs) == nω || throw(DimensionMismatch("Energy-axis length $(length(ωs)) does not match " *
                                                 "the I(q,ω) column count nω=$nω."))
@@ -631,7 +631,7 @@ function autosplitbands(Iqω::AbstractMatrix{<:Real}, ωs; pers_ratio_min::Real=
     # the momentum-grid topology without requiring a physical q coordinate.
     qs_index = collect(1.0:nq)
 
-    return autosplitbands(Iqω, qs_index, ωs; pers_ratio_min=pers_ratio_min, peak_selection=peak_selection)
+    return partition_marginals(Iqω, qs_index, ωs; pers_ratio_min=pers_ratio_min, peak_selection=peak_selection)
 end
 
 
@@ -648,22 +648,22 @@ end
 
 
 """
-    autosplitbands(Iqω, qs, ωs; pers_ratio_min=2.0, grid_weighting=:legacy, peak_selection=:height)
+    partition_marginals(Iqω, qs, ωs; pers_ratio_min=2.0, grid_weighting=:legacy, peak_selection=:height)
 
-Compute naive band segmentation with explicit momentum `qs` and energy `ωs` coordinates. `grid_weighting=:legacy` preserves historical marginal amplitudes. `peak_selection` is forwarded to [`naivesplitbands`](@ref).
+Apply [`slice_partition_marginals`](@ref) in both orientations with explicit momentum `qs` and energy `ωs` coordinates, returning `(splitE, splitQ)`. Formerly `autosplitbands`, which remains an alias. `grid_weighting=:legacy` preserves historical marginal amplitudes. `peak_selection` is forwarded to [`slice_partition_marginals`](@ref).
 
 Note on `:legacy` weighting: each orientation always multiplies by the spacing of its own column coordinate (`ωs[2]-ωs[1]` for `splitE.bandIq`, `qs[2]-qs[1]` for `splitQ.bandIω`) but uses a row spacing of 1. The two-argument method passes `qs = 1:nq`, so its `splitQ.bandIω` differs from the three-argument `:legacy` result by the factor `Δq`. Complete-array L¹ normalization removes these constant factors.
 
 With `grid_weighting=:physical`, each marginal is integrated using the spacing of its summed coordinate, as in Eqs. (7)–(8) of the manuscript. Physical mode requires strictly increasing, finite, uniformly spaced coordinate grids.
 """
-function autosplitbands(Iqω::AbstractMatrix{<:Real}, qs, ωs; pers_ratio_min::Real=2.0, grid_weighting::Symbol=:legacy,
+function partition_marginals(Iqω::AbstractMatrix{<:Real}, qs, ωs; pers_ratio_min::Real=2.0, grid_weighting::Symbol=:legacy,
                         peak_selection::Symbol=:height)
     grid_weighting in (:legacy, :physical) || throw(ArgumentError("grid_weighting must be :legacy or :physical; got $grid_weighting."))
     nq, nω = size(Iqω)
 
-    nq ≥ 2 || throw(ArgumentError("autosplitbands requires at least two momentum samples; got nq=$nq."))
+    nq ≥ 2 || throw(ArgumentError("partition_marginals requires at least two momentum samples; got nq=$nq."))
 
-    nω ≥ 2 || throw(ArgumentError("autosplitbands requires at least two energy samples; got nω=$nω."))
+    nω ≥ 2 || throw(ArgumentError("partition_marginals requires at least two energy samples; got nω=$nω."))
 
     length(qs) == nq || throw(DimensionMismatch("Momentum-axis length $(length(qs)) does not match " *
                                                 "the I(q,ω) row count nq=$nq."))
@@ -675,8 +675,8 @@ function autosplitbands(Iqω::AbstractMatrix{<:Real}, qs, ωs; pers_ratio_min::R
     Δω = grid_weighting === :physical ? _uniform_grid_spacing(ωs, "Energy") : 1.0
 
     # Each call weights its rows by the other coordinate's physical spacing.
-    splitω = naivesplitbands(Iqω, ωs; pers_ratio_min=pers_ratio_min, row_spacing=Δq, peak_selection=peak_selection)
-    splitq = naivesplitbands(permutedims(Iqω), qs; pers_ratio_min=pers_ratio_min, row_spacing=Δω, peak_selection=peak_selection)
+    splitω = slice_partition_marginals(Iqω, ωs; pers_ratio_min=pers_ratio_min, row_spacing=Δq, peak_selection=peak_selection)
+    splitq = slice_partition_marginals(permutedims(Iqω), qs; pers_ratio_min=pers_ratio_min, row_spacing=Δω, peak_selection=peak_selection)
 
     splitE = (bandIq = splitω.bandIq, bandIω = splitω.bandIω)
 
@@ -685,3 +685,20 @@ function autosplitbands(Iqω::AbstractMatrix{<:Real}, qs, ωs; pers_ratio_min::R
 
     return (splitE = splitE, splitQ = splitQ)
 end
+
+#---------------------------------------------------------#
+# Historical names (aliases of the same function objects) #
+#---------------------------------------------------------#
+"""
+    naivesplitbands(Sqω, ωs; kwargs...)
+
+Historical name of [`slice_partition_marginals`](@ref); the same function.
+"""
+const naivesplitbands = slice_partition_marginals
+
+"""
+    autosplitbands(Iqω, [qs,] ωs; kwargs...)
+
+Historical name of [`partition_marginals`](@ref); the same function.
+"""
+const autosplitbands = partition_marginals

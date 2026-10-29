@@ -42,7 +42,8 @@ export MAD, pd_array_intensities, pd_sunny_intensities
 export persistence_entropy, persistence_entropy_curve, betti_curve, betti_curvature
 
 #Topologically-Guided Physical Observables (Naive)
-export autosplitbands, naivesplitbands, merge_energy_bands!
+export partition_marginals, slice_partition_marginals, merge_energy_bands!
+export autosplitbands, naivesplitbands   # historical aliases
 
 include("BandSegmentation.jl") #Physical Bands
 export ComponentResult, RidgeNode, RidgeCycleCandidate, RidgeTopologyResult

@@ -75,3 +75,13 @@ const Lc(ω, ω0, Γ) = 1 / (1 + ((ω - ω0) / Γ)^2)
         @test isapprox(MAD(2.0 .* randn(MersenneTwister(7), 200_000)), 2.0; rtol=0.02)
     end
 end
+
+@testset "Partition-marginal names and aliases" begin
+    @test naivesplitbands === slice_partition_marginals
+    @test autosplitbands === partition_marginals
+    ωs = collect(range(0.0, 100.0; length=64)); qs = collect(range(0.0, 0.4; length=16))
+    I = [Lc(ω, 20 + 60h, 3) + 0.5Lc(ω, 80 - 20h, 3) for h in qs, ω in ωs]
+    @test partition_marginals(I, qs, ωs; grid_weighting=:physical) ==
+          autosplitbands(I, qs, ωs; grid_weighting=:physical)
+    @test slice_partition_marginals(I, ωs) == naivesplitbands(I, ωs)
+end
