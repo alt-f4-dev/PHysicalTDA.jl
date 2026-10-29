@@ -20,6 +20,19 @@ function robust_mad(x)
 end
 @inline robust_sigma(x) = max(robust_mad(x), eps(Float64))
 
+# Run `f(range)` on contiguous chunks of 1:n, one task per chunk.
+# Each task allocates its own scratch buffers inside `f`, so no buffer is
+# indexed by `threadid()` (unsafe under dynamic scheduling). Every index is
+# written by exactly one task, so results do not depend on the thread count.
+function _foreach_chunk(f, n::Integer; nchunks::Integer=Threads.nthreads())
+    n <= 0 && return nothing
+    k = clamp(nchunks, 1, n)
+    @sync for chunk in Iterators.partition(1:n, cld(n, k))
+        Threads.@spawn f(chunk)
+    end
+    return nothing
+end
+
 function robust_background_sigma(A::AbstractMatrix{<:Real})
     vals = vec(Float64.(A))
     μ = median(vals)
@@ -101,17 +114,18 @@ function separable_smooth2d!(B::Matrix{Float64}, A::AbstractMatrix{<:Real};
         end
     end
 
-    prefixes = [Vector{Float64}(undef, nω + 1) for _ in 1:Threads.maxthreadid()]
-    @threads for iq in 1:nq
-        prefix = prefixes[Threads.threadid()]
-        prefix[1] = 0.0
-        @inbounds for iω in 1:nω
-            prefix[iω + 1] = prefix[iω] + tmp[iq, iω]
-        end
-        @inbounds @simd for iω in 1:nω
-            lo = max(1, iω - radius_ω)
-            hi = min(nω, iω + radius_ω)
-            B[iq, iω] = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1)
+    _foreach_chunk(nq) do iqs
+        prefix = Vector{Float64}(undef, nω + 1)
+        for iq in iqs
+            prefix[1] = 0.0
+            @inbounds for iω in 1:nω
+                prefix[iω + 1] = prefix[iω] + tmp[iq, iω]
+            end
+            @inbounds @simd for iω in 1:nω
+                lo = max(1, iω - radius_ω)
+                hi = min(nω, iω + radius_ω)
+                B[iq, iω] = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1)
+            end
         end
     end
     return B
@@ -425,26 +439,25 @@ function qfirst_parent_domains(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                                max_bands::Union{Nothing,Int}=nothing,
                                verbose::Bool=true)
     nq, nω = size(Iqω)
-    works = [Vector{Float64}(undef, nω) for _ in 1:Threads.maxthreadid()]
-    prefixes = [Vector{Float64}(undef, nω + 1) for _ in 1:Threads.maxthreadid()]
     peaks_local = [Int[] for _ in 1:nq]
     scores_local = [Float64[] for _ in 1:nq]
     prom_cuts = zeros(Float64, nq)
 
-    @threads for iq in 1:nq
-        tid = Threads.threadid()
-        work = works[tid]
-        prefix = prefixes[tid]
-        p = Int[]; sc = Float64[]
-        peak_candidates!(p, sc, work, @view(Iqω[iq, :]), ωs;
-                         smooth_radius=smooth_radius_ω,
-                         include_energy_edges=include_energy_edges,
-                         min_prominence=min_prominence,
-                         min_separation_bins=max(2, smooth_radius_ω),
-                         prefix=prefix)
-        peaks_local[iq] = copy(p)
-        scores_local[iq] = copy(sc)
-        prom_cuts[iq] = adaptive_prominence(work)
+    _foreach_chunk(nq) do iqs
+        work = Vector{Float64}(undef, nω)
+        prefix = Vector{Float64}(undef, nω + 1)
+        for iq in iqs
+            p = Int[]; sc = Float64[]
+            peak_candidates!(p, sc, work, @view(Iqω[iq, :]), ωs;
+                             smooth_radius=smooth_radius_ω,
+                             include_energy_edges=include_energy_edges,
+                             min_prominence=min_prominence,
+                             min_separation_bins=max(2, smooth_radius_ω),
+                             prefix=prefix)
+            peaks_local[iq] = copy(p)
+            scores_local[iq] = copy(sc)
+            prom_cuts[iq] = adaptive_prominence(work)
+        end
     end
 
     peak_counts = length.(peaks_local)
@@ -700,35 +713,36 @@ function ridge_peak_slices(Iqω::AbstractMatrix{<:Real}, ωs;
                            max_peaks_per_slice::Int=2,
                            relative_score_floor::Float64=0.1)
     nq, nω = size(Iqω)
-    works = [Vector{Float64}(undef, nω) for _ in 1:Threads.maxthreadid()]
-    prefixes = [Vector{Float64}(undef, nω + 1) for _ in 1:Threads.maxthreadid()]
     peaks_local = [Int[] for _ in 1:nq]
     scores_local = [Float64[] for _ in 1:nq]
 
-    @threads for iq in 1:nq
-        tid = Threads.threadid()
-        p = Int[]
-        sc = Float64[]
-        peak_candidates!(p, sc, works[tid], @view(Iqω[iq, :]), ωs;
-                         smooth_radius=smooth_radius_ω,
-                         include_energy_edges=include_energy_edges,
-                         min_prominence=min_prominence,
-                         min_separation_bins=max(2, smooth_radius_ω),
-                         prefix=prefixes[tid])
-        if !isempty(p)
-            smax = maximum(sc)
-            keep = findall(x -> x >= relative_score_floor * smax, sc)
-            p = p[keep]
-            sc = sc[keep]
+    _foreach_chunk(nq) do iqs
+        work = Vector{Float64}(undef, nω)
+        prefix = Vector{Float64}(undef, nω + 1)
+        for iq in iqs
+            p = Int[]
+            sc = Float64[]
+            peak_candidates!(p, sc, work, @view(Iqω[iq, :]), ωs;
+                             smooth_radius=smooth_radius_ω,
+                             include_energy_edges=include_energy_edges,
+                             min_prominence=min_prominence,
+                             min_separation_bins=max(2, smooth_radius_ω),
+                             prefix=prefix)
+            if !isempty(p)
+                smax = maximum(sc)
+                keep = findall(x -> x >= relative_score_floor * smax, sc)
+                p = p[keep]
+                sc = sc[keep]
+            end
+            if length(p) > max_peaks_per_slice
+                order = sortperm(sc; rev=true)[1:max_peaks_per_slice]
+                p = p[order]
+                sc = sc[order]
+            end
+            ordω = sortperm(p)
+            peaks_local[iq] = copy(p[ordω])
+            scores_local[iq] = copy(sc[ordω])
         end
-        if length(p) > max_peaks_per_slice
-            order = sortperm(sc; rev=true)[1:max_peaks_per_slice]
-            p = p[order]
-            sc = sc[order]
-        end
-        ordω = sortperm(p)
-        peaks_local[iq] = copy(p[ordω])
-        scores_local[iq] = copy(sc[ordω])
     end
     return peaks_local, scores_local
 end
@@ -1637,7 +1651,7 @@ end
 
 function label_components_and_summarize!(components::Vector{ComponentResult},
                                          mask::BitMatrix, Iqω::Matrix{Float64},
-                                         qs::Vector{Float64}, ωs::Vector{Float64},
+                                         qs::AbstractVector{<:Real}, ωs::AbstractVector{<:Real},
                                          parent::Int;
                                          pixel_adjacency::Symbol=:full,
                                          periodic_q::Bool=true,
@@ -1711,7 +1725,8 @@ function label_components_and_summarize!(components::Vector{ComponentResult},
             if npix >= min_resolution_pixels
                 kept_for_parent += 1
                 push!(components, ComponentResult(parent, kept_for_parent,
-                                                  (qs[qmin], qs[qmax]), (ωs[wmin], ωs[wmax]),
+                                                  (Float64(qs[qmin]), Float64(qs[qmax])),
+                                                  (Float64(ωs[wmin]), Float64(ωs[wmax])),
                                                   qmin:qmax, wmin:wmax, npix, weight,
                                                   copy(scratch_Iq), copy(scratch_Iω),
                                                   copy(@view pixbuf[1:npix])))
