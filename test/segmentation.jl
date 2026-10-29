@@ -92,3 +92,16 @@ const Lor(ω, ω0, Γ) = 1 / (1 + ((ω - ω0) / Γ)^2)
         @test all(==(:single), t.summary.status)
     end
 end
+
+@testset "periodic_q defaults to false" begin
+    qs = collect(range(0.0, 1.0; length=48)); ωs = collect(range(0.0, 100.0; length=96))
+    # A band that touches both q-edges at different energies: wrapping would
+    # merge the end rows, a non-periodic axis must not.
+    I = [1 / (1 + ((ω - (20 + 60h)) / 2.5)^2) for h in qs, ω in ωs]
+    d = adaptive_autosplitbands2d(I, qs, ωs; verbose=false)
+    f = adaptive_autosplitbands2d(I, qs, ωs; verbose=false, periodic_q=false)
+    t = adaptive_autosplitbands2d(I, qs, ωs; verbose=false, periodic_q=true)
+    @test [c.linear_indices for c in d.components] == [c.linear_indices for c in f.components]
+    @test d.smooth == f.smooth
+    @test d.smooth != t.smooth          # wrapping mixes the h=0 and h=1 rows
+end

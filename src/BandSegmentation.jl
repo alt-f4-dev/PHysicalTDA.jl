@@ -79,7 +79,7 @@ end
 
 function separable_smooth2d!(B::Matrix{Float64}, A::AbstractMatrix{<:Real};
                              radius_q::Int=1, radius_ω::Int=2,
-                             periodic_q::Bool=true)
+                             periodic_q::Bool=false)
     # Separable smoothing. Thread-local prefix buffers avoid per-row allocation.
     nq, nω = size(A)
     tmp = Matrix{Float64}(undef, nq, nω)
@@ -300,7 +300,7 @@ function infer_parent_count(peak_counts::Vector{Int}; method::Symbol=:quantile,
 end
 
 function fill_missing_centers!(centers::Matrix{Int}, imputed::BitMatrix;
-                               periodic_q::Bool=true)
+                               periodic_q::Bool=false)
     # O(nparents*nq) nearest-neighbor imputation along q.
     # q may be periodic; energy is not.
     nparents, nq = size(centers)
@@ -380,7 +380,7 @@ function candidate_reliability(score::Float64, prom_cut::Float64)
     return score / max(prom_cut, eps(Float64))
 end
 
-function nearest_full_center_column(centers::Matrix{Int}, iq::Int; periodic_q::Bool=true)
+function nearest_full_center_column(centers::Matrix{Int}, iq::Int; periodic_q::Bool=false)
     nparents, nq = size(centers)
     best_j = 0
     best_d = typemax(Int)
@@ -433,7 +433,7 @@ end
 function qfirst_parent_domains(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                                smooth_radius_ω::Int=2,
                                include_energy_edges::Bool=true,
-                               periodic_q::Bool=true,
+                               periodic_q::Bool=false,
                                min_prominence::Union{Nothing,Real}=nothing,
                                parent_count_method::Symbol=:quantile,
                                max_bands::Union{Nothing,Int}=nothing,
@@ -1251,7 +1251,7 @@ function row_activity(mask::BitMatrix, domains, parent::Int)
     return active
 end
 
-function close_short_gaps(active::BitVector, max_gap::Int; periodic_q::Bool=true)
+function close_short_gaps(active::BitVector, max_gap::Int; periodic_q::Bool=false)
     n = length(active)
     closed = copy(active)
     n == 0 && return closed
@@ -1308,7 +1308,7 @@ function repair_parent_mask_continuity!(mask::BitMatrix, S::Matrix{Float64}, dom
                                         centers::Matrix{Int}, parent::Int;
                                         radius_q::Int=1,
                                         radius_ω::Int=2,
-                                        periodic_q::Bool=true)
+                                        periodic_q::Bool=false)
     # Resolution-scale continuity repair, not blind dilation.
     # Only short q-gaps near a tracked centerline are bridged.
     nq, nω = size(mask)
@@ -1418,7 +1418,7 @@ function enforce_parent_centerline_support!(mask::BitMatrix, S::Matrix{Float64},
                                             global_bg::Float64, global_σ::Float64;
                                             radius_q::Int=1,
                                             radius_ω::Int=2,
-                                            periodic_q::Bool=true,
+                                            periodic_q::Bool=false,
                                             kσ_center::Float64=2.0,
                                             parent_fraction_floor::Float64=0.025,
                                             imputed_kσ_center::Float64=1.25,
@@ -1635,7 +1635,7 @@ end
 #--------------------#
 function label_support_components(mask::BitMatrix;
                                   pixel_adjacency::Symbol=:full,
-                                  periodic_q::Bool=true)
+                                  periodic_q::Bool=false)
     nq, nω = size(mask)
     labels = zeros(Int32, nq, nω)
     ncomp = 0
@@ -1685,7 +1685,7 @@ function label_components_and_summarize!(components::Vector{ComponentResult},
                                          qs::AbstractVector{<:Real}, ωs::AbstractVector{<:Real},
                                          parent::Int;
                                          pixel_adjacency::Symbol=:full,
-                                         periodic_q::Bool=true,
+                                         periodic_q::Bool=false,
                                          min_resolution_pixels::Int=12)
     nq, nω = size(mask)
     visited = falses(nq, nω)
@@ -1790,18 +1790,21 @@ full 3×3 neighborhood excluding the center pixel.
 `qs` and `ωs` may be any real vectors, including ranges.
 
 !!! note "Periodic momentum axis"
-    `periodic_q=true` (default) wraps the first and last momentum rows in
-    smoothing, centre imputation, gap repair and component labelling. This is
-    appropriate only when `qs` spans a full period of reciprocal space. For a
-    partial cut (e.g. `h ∈ [0, 0.4]`) or for `|Q|` data, pass
-    `periodic_q=false`. The ridge graph uses `ridge_periodic_q`, which defaults
-    to `false` independently.
+    `periodic_q=false` (default) treats the first and last momentum rows as
+    boundaries. Pass `periodic_q=true` only when `qs` spans a full period of
+    reciprocal space; this wraps the end rows together in smoothing, centre
+    imputation, gap repair and component labelling. The ridge graph uses
+    `ridge_periodic_q`, which also defaults to `false`.
+
+!!! warning "Changed default"
+    Earlier versions defaulted to `periodic_q=true`. Pass `periodic_q=true`
+    explicitly to reproduce results computed with those versions.
 
 `ridge_beta1` in the result counts accepted split–merge events, not the
 graph cycle rank; see [`RidgeTopologyResult`](@ref).
 """
 function adaptive_autosplitbands2d(Iqω_in::AbstractMatrix{<:Real}, qs, ωs;
-                                   periodic_q::Bool=true,
+                                   periodic_q::Bool=false,
                                    include_energy_edges::Bool=true,
                                    resolution_q=nothing,
                                    resolution_ω=nothing,
