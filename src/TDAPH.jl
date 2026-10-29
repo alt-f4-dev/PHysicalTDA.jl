@@ -154,16 +154,24 @@ function pd_sunny_intensities(I::Sunny.Intensities{T,G,N};
                                  essential_cap=essential_cap)
 end
 """
-    MAD(t)
+    MAD(t; elementwise=false)
 
-Elementwise scaled absolute deviation from the median,
-`1.4826 .* abs.(t .- median(t))`, returned with the same shape as `t`.
+Scaled median absolute deviation, `1.4826 * median(abs.(t .- median(t)))`,
+a robust estimate of the standard deviation of Gaussian noise. Returns a
+scalar.
 
-This is **not** the scalar median absolute deviation: that is
-`median(MAD(t))`, or `PHysicalTDA.robust_mad(t)`. The name is kept for
-backwards compatibility.
+With `elementwise=true`, returns the scaled absolute deviations
+`1.4826 .* abs.(t .- median(t))` with the same shape as `t`, without taking the
+outer median.
+
+!!! warning "Changed behaviour"
+    Earlier versions returned the elementwise deviations by default. Use
+    `MAD(t; elementwise=true)` to reproduce them.
 """
-@inline MAD(t) = 1.4826 .* median.(abs.(t .- median(vec(t))))
+function MAD(t; elementwise::Bool=false)
+    dev = 1.4826 .* abs.(t .- median(vec(t)))
+    return elementwise ? dev : median(vec(dev))
+end
 """
     persistence_entropy(PDs; dims = 0:1, tol = 0.0)
 

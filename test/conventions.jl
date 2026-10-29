@@ -5,7 +5,7 @@ const PersistenceDiagram = PHysicalTDA.PersistenceDiagrams.PersistenceDiagram
 
 const Lc(ω, ω0, Γ) = 1 / (1 + ((ω - ω0) / Γ)^2)
 
-@testset "Opt-in conventions (defaults unchanged)" begin
+@testset "Conventions and options" begin
     ωs = collect(range(0.0, 100.0; length=256))
     A2 = [Lc(ω, 30, 4) + 0.5Lc(ω, 70, 4) for ω in ωs]
 
@@ -62,9 +62,16 @@ const Lc(ω, ω0, Γ) = 1 / (1 + ((ω - ω0) / Γ)^2)
         @test_throws ArgumentError naivesplitbands(I, ωs; peak_selection=:bogus)
     end
 
-    @testset "MAD is elementwise" begin
+    @testset "MAD" begin
         x = [1.0, 2.0, 3.0, 4.0, 100.0]
-        @test MAD(x) ≈ 1.4826 .* abs.(x .- median(x))
-        @test median(MAD(x)) ≈ PHysicalTDA.robust_mad(x)
+        @test MAD(x) isa Float64
+        @test MAD(x) ≈ 1.4826 * median(abs.(x .- median(x)))
+        @test MAD(x) ≈ PHysicalTDA.robust_mad(x)
+        @test MAD(x; elementwise=true) ≈ 1.4826 .* abs.(x .- median(x))
+        A = reshape(collect(1.0:12.0), 3, 4)
+        @test size(MAD(A; elementwise=true)) == size(A)
+        @test MAD(A) ≈ PHysicalTDA.robust_mad(vec(A))
+        # Gaussian noise: MAD estimates σ
+        @test isapprox(MAD(2.0 .* randn(MersenneTwister(7), 200_000)), 2.0; rtol=0.02)
     end
 end
