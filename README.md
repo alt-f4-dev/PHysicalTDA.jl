@@ -15,7 +15,7 @@ It will support NXS, JLD2, and ASCII datasets for analysis of raw measurements i
 
 ## Installation
 
-`PHysicalTDA.jl` is not yet registered. It requires Julia 1.11 or 1.12.
+`PHysicalTDA.jl` is not yet registered. It supports Julia 1.10 (LTS) and every later 1.x release.
 
 ```julia
 using Pkg
@@ -100,7 +100,8 @@ The old names refer to the same functions, so existing code and results are unch
 - Threaded segmentation uses task-local scratch buffers, which are safe under Julia's task migration.
 - `threshold` accepts any `Real`.
 - Repaired plotting helpers, examples, and documentation.
-- New tests for segmentation and the optional conventions; CI covers Julia 1.11 and 1.12.
+- New tests for segmentation and the optional conventions.
+- Supports Julia 1.10 (LTS) onward; CI tests 1.10, 1.11, 1.12 and the latest release.
 
 ## Plotting
 
