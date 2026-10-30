@@ -1070,6 +1070,28 @@ function add_splitmerge_pattern_edges!(edges::Vector{Tuple{Int,Int}}, nodes::Vec
     return added, run
 end
 
+"""
+    build_ridge_topology(Iqω, qs, ωs; kwargs...) -> RidgeTopologyResult
+
+Build the ridge graph of an intensity map `Iqω` (rows indexed by `qs`, columns by `ωs`)
+and return its topology as a [`RidgeTopologyResult`](@ref).
+
+1. In each q-slice, keep up to `max_peaks_per_slice` peaks of the ω-profile smoothed with
+   radius `smooth_radius_ω`, discarding peaks scoring below `relative_score_floor` times
+   the slice maximum (and below `min_prominence`, when given).
+2. Link peaks in neighbouring q-slices. Equal peak counts are matched in ω order within
+   `max_jump_bins`. A 1 → 2 or 2 → 1 change is linked as a split or merge when the branch
+   separation lies between `min_branch_separation_bins` and
+   `max_branch_separation_frac * length(ωs)`; otherwise the nearest peak is linked.
+   With `periodic_q=true` the last slice also links to the first.
+3. Add split–merge pattern edges and accept split–merge cycles that span at least
+   `min_cycle_q_fraction` of the q-range, have two peaks in at least
+   `min_two_peak_fraction` of slices, and reach confidence `min_cycle_confidence`.
+4. Report `beta0` (connected components of the graph) and `beta1` (number of accepted
+   split–merge events; the raw cycle rank is in `diagnostics[:raw_beta1]`), and rasterize
+   the graph into `ridge_mask` with tube radius `tube_radius_ω`. Pixel components of the
+   mask are labelled with `pixel_adjacency` connectivity.
+"""
 function build_ridge_topology(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                               smooth_radius_ω::Int=2,
                               include_energy_edges::Bool=false,
