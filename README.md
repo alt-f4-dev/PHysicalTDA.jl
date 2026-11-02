@@ -75,7 +75,7 @@ alternative is requested.
 | `interval` | `betti_curve`, `betti_curvature` | `:closed`: a class is alive on [b, d] | `:halfopen`: alive on [b, d), the rank H_p convention |
 | `peak_selection` | `partition_marginals`, `slice_partition_marginals` | `:height`: partition centres at the highest local maxima of each slice | `:persistence`: partition centres at the births of the most persistent H₀ classes (same number of partitions) |
 
-## Changes in 0.1.1
+## Changes in 0.1.2
 
 **Behaviour changes**
 

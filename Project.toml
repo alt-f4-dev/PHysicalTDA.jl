@@ -1,6 +1,6 @@
 name = "PHysicalTDA"
 uuid = "f5e08b81-9a10-4c75-8e3a-8a27e9e3b0b7"
-version = "0.1.1"
+version = "0.1.2"
 
 [deps]
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
