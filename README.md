@@ -56,6 +56,7 @@ dm  = domain_marginals(Iqω, seg, qs, ωs)
 | Physical band segmentation | `adaptive_autosplitbands2d`, `components_to_band_marginals`, `splitbands` |
 | Ridge topology | `build_ridge_topology`, `ridge_dispersions` |
 | Parent-band domains | `restrict_to_domain`, `domain_marginals`, `analyze_domain_topologies`, `summarize_domain_branches`, `robust_branch_count` |
+| Quantum Fisher information | `qfi_kernel`, `qfi`, `qfi_bound`, `nqfi`, `nqfi_lower_bound`, `qfi_witness`, `band_qfi`, `band_supports`, `band_dependence`, `symmetrize_q`, `to_smag`, `magnetic_form_factor` |
 | Linear spin-wave theory with `Sunny.jl` | `LSWT`, `convert4D`, `collapse`, `La2CuO4`, `TMMC` |
 | Robust statistics | `MAD` |
 | File I/O | `saveHDF5`, `loadHDF5`, `h5tree` |
@@ -63,6 +64,38 @@ dm  = domain_marginals(Iqω, seg, qs, ωs)
 The cubical complex and the filtrations built on intensity data are described on the
 [Conventions](https://alt-f4-dev.github.io/PHysicalTDA.jl/dev/conventions/) page; each function's
 docstring documents its keywords.
+
+## Quantum Fisher information
+
+The QFI functions implement Sec. S2 of the Supplemental Material:
+`F_Q(q, T) = ∫₀^∞ K_T(ω) S_mag(q, ω) dω` with `K_T(ω) = 4 tanh(βω/2)(1 − e^{−βω})`,
+`nQFI = F_Q / (12 S² N)`, band-resolved contributions over disjoint parent-band supports, and the
+witness criterion `G_m`. Energies are in meV and temperatures in K.
+
+```julia
+T  = 10.0                                          # K
+r  = qfi(Iqω, ωs, T; ωrange=(0.5, Inf))            # F_Q(q, T), elastic line excluded
+br = band_qfi(Iqω, seg, ωs, T; ωrange=(0.5, Inf))  # F_Q^(b), residual F_Q^(res), ξ_b
+br.ξ                                               # nparents × nq relative contributions
+
+# Certification needs S_mag in absolute units per magnetic ion, with uncertainties.
+# The form factor is always given explicitly: a function of |Q| or ⟨j₀⟩ coefficients.
+Smag, σS = to_smag(Iqω, Qmag; σ=σI, form_factor=j0_coeffs, scale=absolute_scale)
+Ssym, σsym, _ = symmetrize_q(Smag, qpath; σ=σS)   # needed without inversion symmetry
+w = qfi_witness(qfi(Ssym, ωs, T; σ=σsym, ωrange=(0.5, Inf)); S=5/2, m=1)
+# Several spin sizes per normalization volume: qfi_witness(r; spins=[S₁, S₂, ...], m=1)
+```
+
+Nothing in the QFI functions is specific to a material:
+
+- the magnetic form factor is a required argument of `to_smag` (`MN2_J0` is provided for Mn²⁺);
+- the separable bound is set by a single spin `S` with `N` sites, by per-site `spins` for
+  several magnetic species, or by an explicit `bound` (`qfi_bound`);
+- `symmetrize_q` averages `S(q, ω)` and `S(−q, ω)`, which gives the QFI without assuming inversion
+  symmetry (Eq. S25 assumes it).
+
+The relative contributions `ξ_b` do not depend on the absolute scale. `nQFI` and `G_m` require an
+isolated, absolutely normalized magnetic response; `to_smag` performs the conversion only when called.
 
 ## Optional conventions
 
