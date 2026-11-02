@@ -20,6 +20,19 @@ function robust_mad(x)
 end
 @inline robust_sigma(x) = max(robust_mad(x), eps(Float64))
 
+# Run `f(range)` on contiguous chunks of 1:n, one task per chunk.
+# Each task allocates its own scratch buffers inside `f`, so no buffer is
+# indexed by `threadid()` (unsafe under dynamic scheduling). Every index is
+# written by exactly one task, so results do not depend on the thread count.
+function _foreach_chunk(f, n::Integer; nchunks::Integer=Threads.nthreads())
+    n <= 0 && return nothing
+    k = clamp(nchunks, 1, n)
+    @sync for chunk in Iterators.partition(1:n, cld(n, k))
+        Threads.@spawn f(chunk)
+    end
+    return nothing
+end
+
 function robust_background_sigma(A::AbstractMatrix{<:Real})
     vals = vec(Float64.(A))
     μ = median(vals)
@@ -66,7 +79,7 @@ end
 
 function separable_smooth2d!(B::Matrix{Float64}, A::AbstractMatrix{<:Real};
                              radius_q::Int=1, radius_ω::Int=2,
-                             periodic_q::Bool=true)
+                             periodic_q::Bool=false)
     # Separable smoothing. Thread-local prefix buffers avoid per-row allocation.
     nq, nω = size(A)
     tmp = Matrix{Float64}(undef, nq, nω)
@@ -101,17 +114,18 @@ function separable_smooth2d!(B::Matrix{Float64}, A::AbstractMatrix{<:Real};
         end
     end
 
-    prefixes = [Vector{Float64}(undef, nω + 1) for _ in 1:Threads.maxthreadid()]
-    @threads for iq in 1:nq
-        prefix = prefixes[Threads.threadid()]
-        prefix[1] = 0.0
-        @inbounds for iω in 1:nω
-            prefix[iω + 1] = prefix[iω] + tmp[iq, iω]
-        end
-        @inbounds @simd for iω in 1:nω
-            lo = max(1, iω - radius_ω)
-            hi = min(nω, iω + radius_ω)
-            B[iq, iω] = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1)
+    _foreach_chunk(nq) do iqs
+        prefix = Vector{Float64}(undef, nω + 1)
+        for iq in iqs
+            prefix[1] = 0.0
+            @inbounds for iω in 1:nω
+                prefix[iω + 1] = prefix[iω] + tmp[iq, iω]
+            end
+            @inbounds @simd for iω in 1:nω
+                lo = max(1, iω - radius_ω)
+                hi = min(nω, iω + radius_ω)
+                B[iq, iω] = (prefix[hi + 1] - prefix[lo]) / (hi - lo + 1)
+            end
         end
     end
     return B
@@ -286,7 +300,7 @@ function infer_parent_count(peak_counts::Vector{Int}; method::Symbol=:quantile,
 end
 
 function fill_missing_centers!(centers::Matrix{Int}, imputed::BitMatrix;
-                               periodic_q::Bool=true)
+                               periodic_q::Bool=false)
     # O(nparents*nq) nearest-neighbor imputation along q.
     # q may be periodic; energy is not.
     nparents, nq = size(centers)
@@ -366,7 +380,7 @@ function candidate_reliability(score::Float64, prom_cut::Float64)
     return score / max(prom_cut, eps(Float64))
 end
 
-function nearest_full_center_column(centers::Matrix{Int}, iq::Int; periodic_q::Bool=true)
+function nearest_full_center_column(centers::Matrix{Int}, iq::Int; periodic_q::Bool=false)
     nparents, nq = size(centers)
     best_j = 0
     best_d = typemax(Int)
@@ -419,32 +433,31 @@ end
 function qfirst_parent_domains(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                                smooth_radius_ω::Int=2,
                                include_energy_edges::Bool=true,
-                               periodic_q::Bool=true,
+                               periodic_q::Bool=false,
                                min_prominence::Union{Nothing,Real}=nothing,
                                parent_count_method::Symbol=:quantile,
                                max_bands::Union{Nothing,Int}=nothing,
                                verbose::Bool=true)
     nq, nω = size(Iqω)
-    works = [Vector{Float64}(undef, nω) for _ in 1:Threads.maxthreadid()]
-    prefixes = [Vector{Float64}(undef, nω + 1) for _ in 1:Threads.maxthreadid()]
     peaks_local = [Int[] for _ in 1:nq]
     scores_local = [Float64[] for _ in 1:nq]
     prom_cuts = zeros(Float64, nq)
 
-    @threads for iq in 1:nq
-        tid = Threads.threadid()
-        work = works[tid]
-        prefix = prefixes[tid]
-        p = Int[]; sc = Float64[]
-        peak_candidates!(p, sc, work, @view(Iqω[iq, :]), ωs;
-                         smooth_radius=smooth_radius_ω,
-                         include_energy_edges=include_energy_edges,
-                         min_prominence=min_prominence,
-                         min_separation_bins=max(2, smooth_radius_ω),
-                         prefix=prefix)
-        peaks_local[iq] = copy(p)
-        scores_local[iq] = copy(sc)
-        prom_cuts[iq] = adaptive_prominence(work)
+    _foreach_chunk(nq) do iqs
+        work = Vector{Float64}(undef, nω)
+        prefix = Vector{Float64}(undef, nω + 1)
+        for iq in iqs
+            p = Int[]; sc = Float64[]
+            peak_candidates!(p, sc, work, @view(Iqω[iq, :]), ωs;
+                             smooth_radius=smooth_radius_ω,
+                             include_energy_edges=include_energy_edges,
+                             min_prominence=min_prominence,
+                             min_separation_bins=max(2, smooth_radius_ω),
+                             prefix=prefix)
+            peaks_local[iq] = copy(p)
+            scores_local[iq] = copy(sc)
+            prom_cuts[iq] = adaptive_prominence(work)
+        end
     end
 
     peak_counts = length.(peaks_local)
@@ -526,6 +539,24 @@ end
 #--------------#
 # Result Types #
 #--------------#
+"""
+    ComponentResult
+
+One retained connected support component of a parent band.
+
+- `weight`  :: plain sum `Σ I(qᵢ, ωⱼ)` over the component pixels (no `ΔqΔω`
+  factor). The integrated weight of the manuscript, `W = Σ I Δq Δω`, is
+  `weight * mean(diff(qs)) * mean(diff(ωs))`. Relative weights are unaffected.
+- `bandIq`  :: `Σⱼ I(qᵢ, ωⱼ) Δω` over component pixels (energy-integrated).
+- `bandIω`  :: `Σᵢ I(qᵢ, ωⱼ) Δq` over component pixels (momentum-integrated).
+- `qinds`, `ωinds` :: bounding-box index ranges; `linear_indices` gives exact
+  pixel membership.
+
+Supports are thresholded cores of each band, so marginals summed over the
+components of a parent retain only part of the band's total spectral weight
+(roughly 70% for isolated, noise-free Lorentzian bands with the default
+support settings).
+"""
 struct ComponentResult
     parent_band::Int
     component::Int
@@ -566,6 +597,19 @@ struct RidgeCycleCandidate
     reason::String
 end
 
+"""
+    RidgeTopologyResult
+
+Ridge-graph diagnostics returned by [`build_ridge_topology`](@ref).
+
+- `beta0` :: number of connected components of the ridge node graph
+  (graph first Betti number b₀).
+- `beta1` :: number of **accepted split–merge events** (equal to
+  `accepted_cycle_count`). This is not the cycle rank of the graph: the
+  split–merge rescue adds closure edges, so one physical lens can produce a
+  graph cycle rank greater than 1. The raw graph cycle rank
+  `E − V + b₀` is stored in `diagnostics[:raw_beta1]`.
+"""
 struct RidgeTopologyResult
     nodes::Vector{RidgeNode}
     edges::Vector{Tuple{Int,Int}}
@@ -700,35 +744,36 @@ function ridge_peak_slices(Iqω::AbstractMatrix{<:Real}, ωs;
                            max_peaks_per_slice::Int=2,
                            relative_score_floor::Float64=0.1)
     nq, nω = size(Iqω)
-    works = [Vector{Float64}(undef, nω) for _ in 1:Threads.maxthreadid()]
-    prefixes = [Vector{Float64}(undef, nω + 1) for _ in 1:Threads.maxthreadid()]
     peaks_local = [Int[] for _ in 1:nq]
     scores_local = [Float64[] for _ in 1:nq]
 
-    @threads for iq in 1:nq
-        tid = Threads.threadid()
-        p = Int[]
-        sc = Float64[]
-        peak_candidates!(p, sc, works[tid], @view(Iqω[iq, :]), ωs;
-                         smooth_radius=smooth_radius_ω,
-                         include_energy_edges=include_energy_edges,
-                         min_prominence=min_prominence,
-                         min_separation_bins=max(2, smooth_radius_ω),
-                         prefix=prefixes[tid])
-        if !isempty(p)
-            smax = maximum(sc)
-            keep = findall(x -> x >= relative_score_floor * smax, sc)
-            p = p[keep]
-            sc = sc[keep]
+    _foreach_chunk(nq) do iqs
+        work = Vector{Float64}(undef, nω)
+        prefix = Vector{Float64}(undef, nω + 1)
+        for iq in iqs
+            p = Int[]
+            sc = Float64[]
+            peak_candidates!(p, sc, work, @view(Iqω[iq, :]), ωs;
+                             smooth_radius=smooth_radius_ω,
+                             include_energy_edges=include_energy_edges,
+                             min_prominence=min_prominence,
+                             min_separation_bins=max(2, smooth_radius_ω),
+                             prefix=prefix)
+            if !isempty(p)
+                smax = maximum(sc)
+                keep = findall(x -> x >= relative_score_floor * smax, sc)
+                p = p[keep]
+                sc = sc[keep]
+            end
+            if length(p) > max_peaks_per_slice
+                order = sortperm(sc; rev=true)[1:max_peaks_per_slice]
+                p = p[order]
+                sc = sc[order]
+            end
+            ordω = sortperm(p)
+            peaks_local[iq] = copy(p[ordω])
+            scores_local[iq] = copy(sc[ordω])
         end
-        if length(p) > max_peaks_per_slice
-            order = sortperm(sc; rev=true)[1:max_peaks_per_slice]
-            p = p[order]
-            sc = sc[order]
-        end
-        ordω = sortperm(p)
-        peaks_local[iq] = copy(p[ordω])
-        scores_local[iq] = copy(sc[ordω])
     end
     return peaks_local, scores_local
 end
@@ -1025,6 +1070,28 @@ function add_splitmerge_pattern_edges!(edges::Vector{Tuple{Int,Int}}, nodes::Vec
     return added, run
 end
 
+"""
+    build_ridge_topology(Iqω, qs, ωs; kwargs...) -> RidgeTopologyResult
+
+Build the ridge graph of an intensity map `Iqω` (rows indexed by `qs`, columns by `ωs`)
+and return its topology as a [`RidgeTopologyResult`](@ref).
+
+1. In each q-slice, keep up to `max_peaks_per_slice` peaks of the ω-profile smoothed with
+   radius `smooth_radius_ω`, discarding peaks scoring below `relative_score_floor` times
+   the slice maximum (and below `min_prominence`, when given).
+2. Link peaks in neighbouring q-slices. Equal peak counts are matched in ω order within
+   `max_jump_bins`. A 1 → 2 or 2 → 1 change is linked as a split or merge when the branch
+   separation lies between `min_branch_separation_bins` and
+   `max_branch_separation_frac * length(ωs)`; otherwise the nearest peak is linked.
+   With `periodic_q=true` the last slice also links to the first.
+3. Add split–merge pattern edges and accept split–merge cycles that span at least
+   `min_cycle_q_fraction` of the q-range, have two peaks in at least
+   `min_two_peak_fraction` of slices, and reach confidence `min_cycle_confidence`.
+4. Report `beta0` (connected components of the graph) and `beta1` (number of accepted
+   split–merge events; the raw cycle rank is in `diagnostics[:raw_beta1]`), and rasterize
+   the graph into `ridge_mask` with tube radius `tube_radius_ω`. Pixel components of the
+   mask are labelled with `pixel_adjacency` connectivity.
+"""
 function build_ridge_topology(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                               smooth_radius_ω::Int=2,
                               include_energy_edges::Bool=false,
@@ -1206,7 +1273,7 @@ function row_activity(mask::BitMatrix, domains, parent::Int)
     return active
 end
 
-function close_short_gaps(active::BitVector, max_gap::Int; periodic_q::Bool=true)
+function close_short_gaps(active::BitVector, max_gap::Int; periodic_q::Bool=false)
     n = length(active)
     closed = copy(active)
     n == 0 && return closed
@@ -1263,7 +1330,7 @@ function repair_parent_mask_continuity!(mask::BitMatrix, S::Matrix{Float64}, dom
                                         centers::Matrix{Int}, parent::Int;
                                         radius_q::Int=1,
                                         radius_ω::Int=2,
-                                        periodic_q::Bool=true)
+                                        periodic_q::Bool=false)
     # Resolution-scale continuity repair, not blind dilation.
     # Only short q-gaps near a tracked centerline are bridged.
     nq, nω = size(mask)
@@ -1373,7 +1440,7 @@ function enforce_parent_centerline_support!(mask::BitMatrix, S::Matrix{Float64},
                                             global_bg::Float64, global_σ::Float64;
                                             radius_q::Int=1,
                                             radius_ω::Int=2,
-                                            periodic_q::Bool=true,
+                                            periodic_q::Bool=false,
                                             kσ_center::Float64=2.0,
                                             parent_fraction_floor::Float64=0.025,
                                             imputed_kσ_center::Float64=1.25,
@@ -1590,7 +1657,7 @@ end
 #--------------------#
 function label_support_components(mask::BitMatrix;
                                   pixel_adjacency::Symbol=:full,
-                                  periodic_q::Bool=true)
+                                  periodic_q::Bool=false)
     nq, nω = size(mask)
     labels = zeros(Int32, nq, nω)
     ncomp = 0
@@ -1637,10 +1704,10 @@ end
 
 function label_components_and_summarize!(components::Vector{ComponentResult},
                                          mask::BitMatrix, Iqω::Matrix{Float64},
-                                         qs::Vector{Float64}, ωs::Vector{Float64},
+                                         qs::AbstractVector{<:Real}, ωs::AbstractVector{<:Real},
                                          parent::Int;
                                          pixel_adjacency::Symbol=:full,
-                                         periodic_q::Bool=true,
+                                         periodic_q::Bool=false,
                                          min_resolution_pixels::Int=12)
     nq, nω = size(mask)
     visited = falses(nq, nω)
@@ -1711,7 +1778,8 @@ function label_components_and_summarize!(components::Vector{ComponentResult},
             if npix >= min_resolution_pixels
                 kept_for_parent += 1
                 push!(components, ComponentResult(parent, kept_for_parent,
-                                                  (qs[qmin], qs[qmax]), (ωs[wmin], ωs[wmax]),
+                                                  (Float64(qs[qmin]), Float64(qs[qmax])),
+                                                  (Float64(ωs[wmin]), Float64(ωs[wmax])),
                                                   qmin:qmax, wmin:wmax, npix, weight,
                                                   copy(scratch_Iq), copy(scratch_Iω),
                                                   copy(@view pixbuf[1:npix])))
@@ -1740,9 +1808,25 @@ Key options include `periodic_q`, `resolution_q`, `resolution_ω`,
 `parent_count_method`, `max_bands`, `pixel_adjacency`, and `ridge_*` controls.
 Use `pixel_adjacency=:edge` for edge-sharing support and `:full` for the
 full 3×3 neighborhood excluding the center pixel.
+
+`qs` and `ωs` may be any real vectors, including ranges.
+
+!!! note "Periodic momentum axis"
+    `periodic_q=false` (default) treats the first and last momentum rows as
+    boundaries. Pass `periodic_q=true` only when `qs` spans a full period of
+    reciprocal space; this wraps the end rows together in smoothing, centre
+    imputation, gap repair and component labelling. The ridge graph uses
+    `ridge_periodic_q`, which also defaults to `false`.
+
+!!! warning "Changed default"
+    Earlier versions defaulted to `periodic_q=true`. Pass `periodic_q=true`
+    explicitly to reproduce results computed with those versions.
+
+`ridge_beta1` in the result counts accepted split–merge events, not the
+graph cycle rank; see [`RidgeTopologyResult`](@ref).
 """
 function adaptive_autosplitbands2d(Iqω_in::AbstractMatrix{<:Real}, qs, ωs;
-                                   periodic_q::Bool=true,
+                                   periodic_q::Bool=false,
                                    include_energy_edges::Bool=true,
                                    resolution_q=nothing,
                                    resolution_ω=nothing,

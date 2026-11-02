@@ -23,7 +23,8 @@ The cubical complex is preferred over simplicial meshes (Vietoris-Rips, alpha, e
 Persistent homology is computed by applying a filtration to the cubical complex covering the intensity data. In PHysicalTDA:
 - Filtrations are either *superlevel* or *sublevel* 
 - Persistence tracks when a topological feature appears and vanishes
-- Filtration parameters are chosen to be invariant under monotonic rescaling of intensity
+- Which features are paired, and in what order they appear, is invariant under any strictly increasing rescaling of intensity; the birth and death values themselves are not. With `normalize=true`, diagrams are also invariant under positive affine rescaling `a⋅I + b` (`a > 0`)
+- For superlevel filtrations, births and deaths are reported as negated (or, when normalized, complemented) intensities, so lifetimes are `death - birth ≥ 0`
 
 This construction allows robust identification of topological features corresponding to excitation branches, gaps, continua, and intersections.
 

@@ -1,15 +1,9 @@
-module TopoViz
+module PHysicalTDAMakieExt
+# Plotting for PHysicalTDA, loaded automatically when Makie is loaded.
+# Called through the lazy wrappers `PHysicalTDA.plot_*`.
 
-using Makie #Lazy Plot
-
-#import functions
-using ..PHysicalTDA: betti_curve
-using Ripserer: birth, death
-
-#export plotting utils (non-mutatint)
-export plot_persistence_diagram, plot_lifetime_diagram,
-       plot_betti_curvature, plot_persistence_entropy, 
-       plot_betti_surface, plot_dataset_overview
+using Makie
+using PHysicalTDA: betti_curve, birth, death
 
 
 #export plotting utils (mutating)
@@ -85,8 +79,8 @@ function plot_betti_surface(dataset; p::Int=0, nτ::Int=256, title="Betti Surfac
     for r in dataset
         for Δ in r.PD
             isempty(Δ) && continue
-            append!(tmins, filter(isfinite, (birth(x) for x in Δ)))
-            append!(tmaxs, filter(isfinite, (death(x) for x in Δ)))
+            append!(tmins, filter(isfinite, [birth(x) for x in Δ]))
+            append!(tmaxs, filter(isfinite, [death(x) for x in Δ]))
         end
     end
     if isempty(tmins) || isempty(tmaxs)
@@ -126,12 +120,12 @@ function plot_dataset_overview(dataset; p::Int=0, nτ::Int=256, savepath::Union{
     for r in dataset
         for Δ in r.PD
             isempty(Δ) && continue
-            append!(tmins, filter(isfinite, (birth(x) for x in Δ)))
-            append!(tmaxs, filter(isfinite, (death(x) for x in Δ)))
+            append!(tmins, filter(isfinite, [birth(x) for x in Δ]))
+            append!(tmaxs, filter(isfinite, [death(x) for x in Δ]))
         end
     end
     if isempty(tmins) || isempty(tmaxs)
-        Label(fig[2,1], "No finite births/deaths in dataset"); savepath===nothing || save(fig, savepath); return fig
+        Label(fig[2,1], "No finite births/deaths in dataset"); savepath===nothing || save(savepath, fig); return fig
     end
     τ = range(minimum(tmins)+eps(), maximum(tmaxs)-eps(); length=nτ)
     βmat = zeros(Float64, length(dataset), nτ)
@@ -143,7 +137,7 @@ function plot_dataset_overview(dataset; p::Int=0, nτ::Int=256, savepath::Union{
     hm = heatmap!(ax2, collect(τ), 1:length(dataset), βmat)
     Colorbar(fig[2,2], hm; label="β_$p")
     Label(fig[2,3], τinfo)
-    savepath === nothing || save(fig, savepath)
+    savepath === nothing || save(savepath, fig)
     return fig
 end
 
