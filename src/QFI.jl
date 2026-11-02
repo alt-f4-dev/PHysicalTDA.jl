@@ -11,8 +11,10 @@ assumed. Summing over components, F_Q = Σ_α F_Q^αα and S_mag = Σ_α S^αα,
 
     nQFI(q, T) = F_Q(q, T) / (4 n_c S² N),
 
-with n_c = 3 components for the component-summed response (12 S² N). nQFI > m
-certifies at least (m + 1)-partite entanglement.
+with n_c = 3 components for the component-summed response (12 S² N); for sites of
+different spin, S² N → Σ_n S_n² (see `qfi_bound`). nQFI > m certifies at least
+(m + 1)-partite entanglement. Without inversion symmetry, S(q, ω) is replaced by
+[S(q, ω) + S(−q, ω)]/2 (see `symmetrize_q`).
 
 Band-resolved contributions restrict the ω > 0 integral to disjoint supports
 C^(b) (Eq. S29); F_Q = Σ_b F_Q^(b) + F_Q^(res) holds exactly for the measured bins.
@@ -199,41 +201,82 @@ end
 # Normalization & witness #
 #-------------------------#
 
-function _qfi_bound_scale(S_spin::Real, N::Real, ncomponents::Integer)
-    S_spin > 0 || throw(ArgumentError("spin S must be positive; got $S_spin."))
-    N > 0 || throw(ArgumentError("N must be positive; got $N."))
+"""
+    qfi_bound(; S=nothing, N=nothing, spins=nothing, bound=nothing, ncomponents=3)
+
+Separable (1-producible) bound `B` used to normalize the QFI, `nQFI = F_Q / B`.
+Give exactly one of:
+
+- `S` (and optionally `N`, default 1): `N` sites of equal spin `S`,
+  `B = 4 n_c S² N` (`12 S² N` for the component-summed response, Eq. S28).
+- `spins`: the spin of every site in the normalization volume, for systems with
+  several magnetic species or spin sizes, `B = 4 n_c Σ_n S_n²`.
+- `bound`: `B` itself, for local operators other than spin components.
+
+`n_c = ncomponents` is the number of spin components summed in `S(q, ω)` (3 for
+`S_mag`).
+
+For local operators with ranges `Δ_n = o_max − o_min`, any `m`-producible state
+satisfies `F_Q ≤ m Σ_n Δ_n²` (Cauchy–Schwarz on each block of at most `m` sites),
+and `Δ_n² = 4 S_n²` for a spin component. Hence `nQFI > m` certifies at least
+`(m + 1)`-partite entanglement; for equal spins this is the bound of Eq. S26.
+"""
+function qfi_bound(; S::Union{Nothing,Real}=nothing, N::Union{Nothing,Real}=nothing,
+                   spins::Union{Nothing,AbstractVector{<:Real}}=nothing,
+                   bound::Union{Nothing,Real}=nothing, ncomponents::Integer=3)
+    count(!isnothing, (S, spins, bound)) == 1 ||
+        throw(ArgumentError("give exactly one of `S`, `spins` or `bound`."))
     1 <= ncomponents <= 3 || throw(ArgumentError("ncomponents must be 1, 2 or 3; got $ncomponents."))
-    return 4 * ncomponents * Float64(S_spin)^2 * Float64(N)
+    if bound !== nothing
+        N === nothing || throw(ArgumentError("`N` cannot be combined with an explicit `bound`."))
+        bound > 0 || throw(ArgumentError("bound must be positive; got $bound."))
+        return Float64(bound)
+    elseif spins !== nothing
+        N === nothing || throw(ArgumentError("`N` cannot be combined with `spins`; `spins` lists every site."))
+        isempty(spins) && throw(ArgumentError("spins must not be empty."))
+        all(>(0), spins) || throw(ArgumentError("all spins must be positive."))
+        return 4 * ncomponents * sum(abs2, Float64.(spins))
+    else
+        Nv = N === nothing ? 1.0 : Float64(N)
+        S > 0 || throw(ArgumentError("spin S must be positive; got $S."))
+        Nv > 0 || throw(ArgumentError("N must be positive; got $N."))
+        return 4 * ncomponents * Float64(S)^2 * Nv
+    end
 end
 
 """
     nqfi(FQ; S, N=1, ncomponents=3)
-    nqfi(r::QFIResult; S, N=1, ncomponents=3)
+    nqfi(FQ; spins, ncomponents=3)
+    nqfi(FQ; bound)
+    nqfi(r::QFIResult; kwargs...)
 
-Normalized QFI `F_Q / (4 n_c S² N)`. With `ncomponents = 3` (component-summed
-response) this is `F_Q / (12 S² N)` (Eq. S28).
+Normalized QFI `F_Q / B` with the bound `B` from [`qfi_bound`](@ref). For equal spins
+and the component-summed response this is `F_Q / (12 S² N)` (Eq. S28).
 
-Use `N = 1` when `S(q, ω)` is normalized per spin (per magnetic ion); use the number
-of spins when it is normalized to the whole system.
+Use `N = 1` (or the spins of one formula unit's magnetic sites) when `S(q, ω)` is
+normalized per magnetic ion (per formula unit); use the full site count when it is
+normalized to the whole system.
 """
-nqfi(FQ::AbstractVector{<:Real}; S::Real, N::Real=1, ncomponents::Integer=3) =
-    Float64.(FQ) ./ _qfi_bound_scale(S, N, ncomponents)
+nqfi(FQ::AbstractVector{<:Real}; kwargs...) = Float64.(FQ) ./ qfi_bound(; kwargs...)
 nqfi(r::QFIResult; kwargs...) = nqfi(r.FQ; kwargs...)
 
 """
-    nqfi_lower_bound(r::QFIResult; S, N=1, ncomponents=3, nσ=2)
+    nqfi_lower_bound(r::QFIResult; nσ=2, bound_kwargs...)
 
-Conservative normalized QFI `(F_Q − nσ σ_FQ) / (4 n_c S² N)`.
+Conservative normalized QFI `(F_Q − nσ σ_FQ) / B`, with `B` from [`qfi_bound`](@ref)
+(`S`/`N`, `spins` or `bound`, and `ncomponents`).
 """
-function nqfi_lower_bound(r::QFIResult; S::Real, N::Real=1, ncomponents::Integer=3, nσ::Real=2)
+function nqfi_lower_bound(r::QFIResult; nσ::Real=2, kwargs...)
     nσ >= 0 || throw(ArgumentError("nσ must be non-negative; got $nσ."))
-    return (r.FQ .- nσ .* r.σFQ) ./ _qfi_bound_scale(S, N, ncomponents)
+    return (r.FQ .- nσ .* r.σFQ) ./ qfi_bound(; kwargs...)
 end
 
 """
-    qfi_witness(r::QFIResult; S, m=1, N=1, ncomponents=3, nσ=2)
+    qfi_witness(r::QFIResult; m=1, nσ=2, bound_kwargs...)
 
-Entanglement-witness criterion `G_m(q, T)` (Eq. S30). Returns a named tuple
+Entanglement-witness criterion `G_m(q, T)` (Eq. S30). The normalization is given as
+for [`qfi_bound`](@ref) (`S`/`N`, `spins` or `bound`, and `ncomponents`). Returns a
+named tuple
 
 - `nqfi_lb`   :: conservative normalized QFI ([`nqfi_lower_bound`](@ref)).
 - `certified` :: `G_m = 1` (`true`) where `nqfi_lb > m`, i.e. at least
@@ -242,10 +285,9 @@ Entanglement-witness criterion `G_m(q, T)` (Eq. S30). Returns a named tuple
 
 `false` means only that entanglement was not certified.
 """
-function qfi_witness(r::QFIResult; S::Real, m::Integer=1, N::Real=1,
-                     ncomponents::Integer=3, nσ::Real=2)
+function qfi_witness(r::QFIResult; m::Integer=1, nσ::Real=2, kwargs...)
     m >= 1 || throw(ArgumentError("m must be a positive integer; got $m."))
-    lb = nqfi_lower_bound(r; S=S, N=N, ncomponents=ncomponents, nσ=nσ)
+    lb = nqfi_lower_bound(r; nσ=nσ, kwargs...)
     return (nqfi_lb=lb, certified=BitVector(lb .> m), m=Int(m))
 end
 
@@ -400,13 +442,14 @@ function band_qfi(S::AbstractMatrix{<:Real}, result::NamedTuple, ωs, T::Real;
 end
 
 """
-    band_dependence(br::BandQFIResult; S, m=1, N=1, ncomponents=3, nσ=2)
+    band_dependence(br::BandQFIResult; m=1, nσ=2, bound_kwargs...)
 
 Leave-one-band-out test of a certified witness. For each band `b`,
 
-    nQFI_lb^(−b) = nQFI_lb − F_Q^(b) / (4 n_c S² N),
+    nQFI_lb^(−b) = nQFI_lb − F_Q^(b) / B,
 
-using the point estimate `F_Q^(b)`. Returns a named tuple
+using the point estimate `F_Q^(b)` and the bound `B` from [`qfi_bound`](@ref)
+(`S`/`N`, `spins` or `bound`, and `ncomponents`). Returns a named tuple
 
 - `nqfi_lb`           :: `nQFI_lb(q)` of the full measured response.
 - `certified`         :: `nqfi_lb .> m`.
@@ -416,13 +459,77 @@ using the point estimate `F_Q^(b)`. Returns a named tuple
 A certificate that is lost when `b` is removed depends on that band. This
 attributes contribution, not an entanglement depth per band.
 """
-function band_dependence(br::BandQFIResult; S::Real, m::Integer=1, N::Real=1,
-                         ncomponents::Integer=3, nσ::Real=2)
-    w = qfi_witness(br.total; S=S, m=m, N=N, ncomponents=ncomponents, nσ=nσ)
-    scale = _qfi_bound_scale(S, N, ncomponents)
-    without = w.nqfi_lb' .- br.FQ ./ scale
+function band_dependence(br::BandQFIResult; m::Integer=1, nσ::Real=2, kwargs...)
+    w = qfi_witness(br.total; m=m, nσ=nσ, kwargs...)
+    B = qfi_bound(; kwargs...)
+    without = w.nqfi_lb' .- br.FQ ./ B
     return (nqfi_lb=w.nqfi_lb, certified=w.certified,
             nqfi_lb_without=Matrix(without), certified_without=BitMatrix(without .> m))
+end
+
+#------------------------------#
+# Symmetrization over q and −q #
+#------------------------------#
+
+"""
+    symmetrize_q(S, qs; σ=nothing, minus=q -> .-q, atol=1e-8) -> (S, σ, partner)
+
+Symmetrize `S(q, ω)` over `q` and `−q`: row `i` becomes `[S(q_i, ω) + S(−q_i, ω)] / 2`.
+
+The positive-frequency QFI of Eq. S25 assumes `S(q, ω) = S(−q, ω)`. In general the
+momentum-resolved QFI, `F_Q[X̂_q] + F_Q[Ŷ_q]` with the Hermitian quadratures of `Ô_q`, is
+
+    F_Q(q, T) = ∫₀^∞ K_T(ω) [S(q, ω) + S(−q, ω)] / 2 dω,
+
+so applying [`qfi`](@ref) to the symmetrized `S` gives the QFI without assuming
+inversion symmetry; for a symmetric response it changes nothing.
+
+- `qs`    :: momenta of the rows, as numbers, tuples or vectors (e.g. `(h, k, l)`).
+- `minus` :: map from `q` to the momentum paired with it, `−q` (`.-q`) by default. Supply an
+             equivalent point (e.g. `−q + G` for a reciprocal-lattice vector `G`) when
+             `−q` itself is not on the measured path and the response is periodic.
+- `atol`  :: tolerance for matching `minus(q_i)` to a row, as a Euclidean distance.
+- `σ`     :: optional uncertainties, combined as `√(σ_i² + σ_j²)/2` for `i ≠ j`.
+
+Rows whose partner is not on the grid, and bins where either partner is `NaN`,
+become `NaN` (unmeasured). `partner[i]` is the matched row index, or `0` when
+there is none.
+"""
+function symmetrize_q(S::AbstractMatrix{<:Real}, qs;
+                      σ::Union{Nothing,AbstractMatrix{<:Real}}=nothing,
+                      minus=q -> .-q, atol::Real=1e-8)
+    nq, nω = size(S)
+    length(qs) == nq || throw(DimensionMismatch("qs has length $(length(qs)); expected $nq rows."))
+    _check_same_size(σ, S, "σ")
+    qv = [collect(Float64, q) for q in qs]
+    partner = zeros(Int, nq)
+    for i in 1:nq
+        target = collect(Float64, minus(qs[i]))
+        best, dbest = 0, Inf
+        for j in 1:nq
+            length(qv[j]) == length(target) ||
+                throw(DimensionMismatch("minus(q) has dimension $(length(target)); q has $(length(qv[j]))."))
+            d = sqrt(sum(abs2, qv[j] .- target))
+            d < dbest && ((best, dbest) = (j, d))
+        end
+        partner[i] = dbest <= atol ? best : 0
+    end
+    Ssym = fill(NaN, nq, nω)
+    σsym = σ === nothing ? nothing : fill(NaN, nq, nω)
+    @inbounds for i in 1:nq
+        j = partner[i]
+        j == 0 && continue
+        for k in 1:nω
+            a, b = Float64(S[i, k]), Float64(S[j, k])
+            (isnan(a) || isnan(b)) && continue
+            Ssym[i, k] = (a + b) / 2
+            if σ !== nothing
+                ea, eb = Float64(σ[i, k]), Float64(σ[j, k])
+                σsym[i, k] = i == j ? ea : sqrt(ea^2 + eb^2) / 2
+            end
+        end
+    end
+    return (Ssym, σsym, partner)
 end
 
 #--------------------------------------#
@@ -434,26 +541,34 @@ end
 
 Dipole-approximation `⟨j₀⟩` coefficients `(A, a, B, b, C, c, D)` for Mn²⁺
 (P. J. Brown, International Tables for Crystallography Vol. C, Sec. 4.4.5):
-`(0.4220, 17.6840, 0.5948, 6.0050, 0.0043, -0.6090, -0.0219)`.
+`(0.4220, 17.6840, 0.5948, 6.0050, 0.0043, -0.6090, -0.0219)`. Provided as a
+convenience; no function uses it unless it is passed explicitly.
 """
 const MN2_J0 = (0.4220, 17.6840, 0.5948, 6.0050, 0.0043, -0.6090, -0.0219)
 
 """
-    magnetic_form_factor(Q, coeffs=MN2_J0)
+    magnetic_form_factor(Q, coeffs)
 
 Dipole-approximation magnetic form factor
-`⟨j₀⟩(s) = A e^{−a s²} + B e^{−b s²} + C e^{−c s²} + D` with `s = Q/(4π)` and `Q` in Å⁻¹.
-`coeffs = (A, a, B, b, C, c, D)`; the default is Mn²⁺ ([`MN2_J0`](@ref)).
+`⟨j₀⟩(s) = A e^{−a s²} + B e^{−b s²} + C e^{−c s²} + D` with `s = Q/(4π)` and `Q` in Å⁻¹,
+for the ion described by `coeffs = (A, a, B, b, C, c, D)` (e.g. [`MN2_J0`](@ref), or a
+row of the ⟨j₀⟩ tables of Brown, International Tables for Crystallography Vol. C).
 """
-function magnetic_form_factor(Q::Real, coeffs=MN2_J0)
+function magnetic_form_factor(Q::Real, coeffs)
+    length(coeffs) == 7 ||
+        throw(ArgumentError("form-factor coefficients must be (A, a, B, b, C, c, D); got $(length(coeffs)) values."))
     A, a, B, b, C, c, D = coeffs
     s2 = (Float64(Q) / (4π))^2
     return A * exp(-a * s2) + B * exp(-b * s2) + C * exp(-c * s2) + D
 end
 
+_form_factor_function(f::Function) = f
+_form_factor_function(c::Union{Tuple,AbstractVector}) = Q -> magnetic_form_factor(Q, c)
+_form_factor_function(x) =
+    throw(ArgumentError("form_factor must be a function of |Q| or a coefficient tuple (A, a, B, b, C, c, D)."))
+
 """
-    to_smag(I, Qmag; σ=nothing, form_factor=Q -> magnetic_form_factor(Q), g=2,
-            polarization=3/2, scale=1) -> (S, σ)
+    to_smag(I, Qmag; form_factor, σ=nothing, g=2, polarization=3/2, scale=1) -> (S, σ)
 
 Convert a background-subtracted magnetic intensity `I(q, ω)` (`nq × nω`) into the
 component-summed `S_mag(q, ω)`:
@@ -461,8 +576,10 @@ component-summed `S_mag(q, ω)`:
     S_mag = scale × polarization × I / ((g/2)² F(|Q|)²).
 
 - `Qmag`         :: `|Q|` in Å⁻¹, either one value per row (`nq`) or one per bin (`nq × nω`).
-- `form_factor`  :: function of `|Q|` returning the magnetic form factor.
-- `g`            :: Landé g-factor.
+- `form_factor`  :: required. The magnetic form factor of the ion, as a function of `|Q|`
+                    or as `⟨j₀⟩` coefficients `(A, a, B, b, C, c, D)` (see
+                    [`magnetic_form_factor`](@ref)). Pass `Q -> 1.0` to skip the correction.
+- `g`            :: Landé g-factor (spin-only value 2 by default).
 - `polarization` :: ratio of the component-summed response to the unpolarized cross
                     section. Unpolarized neutrons measure `Σ_α (1 − Q̂_α²) S^αα`; for an
                     isotropic response this is `2/3` of `S_mag`, hence the default `3/2`.
@@ -479,10 +596,11 @@ Applying the conversion is the caller's choice: none of the QFI functions apply 
 implicitly.
 """
 function to_smag(I::AbstractMatrix{<:Real}, Qmag;
+                 form_factor,
                  σ::Union{Nothing,AbstractMatrix{<:Real}}=nothing,
-                 form_factor=Q -> magnetic_form_factor(Q),
                  g::Real=2, polarization::Real=3/2, scale::Real=1)
     _check_same_size(σ, I, "σ")
+    F = _form_factor_function(form_factor)
     nq, nω = size(I)
     Qm = if Qmag isa AbstractVector
         length(Qmag) == nq || throw(DimensionMismatch("Qmag has length $(length(Qmag)); expected $nq."))
@@ -493,8 +611,8 @@ function to_smag(I::AbstractMatrix{<:Real}, Qmag;
     end
     factor = similar(Qm)
     @inbounds for k in eachindex(Qm)
-        F = form_factor(Qm[k])
-        factor[k] = scale * polarization / ((g / 2)^2 * F^2)
+        Fk = F(Qm[k])
+        factor[k] = scale * polarization / ((g / 2)^2 * Fk^2)
     end
     S = Float64.(I) .* factor
     σS = σ === nothing ? nothing : abs.(Float64.(σ) .* factor)

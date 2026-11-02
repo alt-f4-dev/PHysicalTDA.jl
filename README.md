@@ -56,7 +56,7 @@ dm  = domain_marginals(Iqω, seg, qs, ωs)
 | Physical band segmentation | `adaptive_autosplitbands2d`, `components_to_band_marginals`, `splitbands` |
 | Ridge topology | `build_ridge_topology`, `ridge_dispersions` |
 | Parent-band domains | `restrict_to_domain`, `domain_marginals`, `analyze_domain_topologies`, `summarize_domain_branches`, `robust_branch_count` |
-| Quantum Fisher information | `qfi_kernel`, `qfi`, `nqfi`, `nqfi_lower_bound`, `qfi_witness`, `band_qfi`, `band_supports`, `band_dependence`, `to_smag`, `magnetic_form_factor` |
+| Quantum Fisher information | `qfi_kernel`, `qfi`, `qfi_bound`, `nqfi`, `nqfi_lower_bound`, `qfi_witness`, `band_qfi`, `band_supports`, `band_dependence`, `symmetrize_q`, `to_smag`, `magnetic_form_factor` |
 | Linear spin-wave theory with `Sunny.jl` | `LSWT`, `convert4D`, `collapse`, `La2CuO4`, `TMMC` |
 | Robust statistics | `MAD` |
 | File I/O | `saveHDF5`, `loadHDF5`, `h5tree` |
@@ -78,10 +78,21 @@ r  = qfi(Iqω, ωs, T; ωrange=(0.5, Inf))            # F_Q(q, T), elastic line 
 br = band_qfi(Iqω, seg, ωs, T; ωrange=(0.5, Inf))  # F_Q^(b), residual F_Q^(res), ξ_b
 br.ξ                                               # nparents × nq relative contributions
 
-# Certification needs S_mag in absolute units per magnetic ion, with uncertainties:
-Smag, σS = to_smag(Iqω, Qmag; σ=σI, scale=absolute_scale)  # form factor, g, polarization
-w = qfi_witness(qfi(Smag, ωs, T; σ=σS, ωrange=(0.5, Inf)); S=5/2, m=1)
+# Certification needs S_mag in absolute units per magnetic ion, with uncertainties.
+# The form factor is always given explicitly: a function of |Q| or ⟨j₀⟩ coefficients.
+Smag, σS = to_smag(Iqω, Qmag; σ=σI, form_factor=j0_coeffs, scale=absolute_scale)
+Ssym, σsym, _ = symmetrize_q(Smag, qpath; σ=σS)   # needed without inversion symmetry
+w = qfi_witness(qfi(Ssym, ωs, T; σ=σsym, ωrange=(0.5, Inf)); S=5/2, m=1)
+# Several spin sizes per normalization volume: qfi_witness(r; spins=[S₁, S₂, ...], m=1)
 ```
+
+Nothing in the QFI functions is specific to a material:
+
+- the magnetic form factor is a required argument of `to_smag` (`MN2_J0` is provided for Mn²⁺);
+- the separable bound is set by a single spin `S` with `N` sites, by per-site `spins` for
+  several magnetic species, or by an explicit `bound` (`qfi_bound`);
+- `symmetrize_q` averages `S(q, ω)` and `S(−q, ω)`, which gives the QFI without assuming inversion
+  symmetry (Eq. S25 assumes it).
 
 The relative contributions `ξ_b` do not depend on the absolute scale. `nQFI` and `G_m` require an
 isolated, absolutely normalized magnetic response; `to_smag` performs the conversion only when called.

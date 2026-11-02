@@ -115,6 +115,19 @@ end
         @test w.certified == [false, true] && w.m == 1
         @test qfi_witness(r; S=Sspin, m=2).certified == [false, false]
         @test_throws ArgumentError nqfi(r; S=-1)
+
+        # General bound: per-site spins and explicit bounds.
+        @test qfi_bound(; S=Sspin, N=4) ≈ 12Sspin^2 * 4
+        @test qfi_bound(; spins=fill(Sspin, 4)) ≈ qfi_bound(; S=Sspin, N=4)
+        @test qfi_bound(; spins=[1/2, 5/2], ncomponents=1) ≈ 4 * (1/4 + 25/4)
+        @test nqfi(r; spins=[Sspin]) ≈ nqfi(r; S=Sspin)
+        @test nqfi(r; bound=10.0) ≈ r.FQ ./ 10
+        @test qfi_witness(r; spins=[1/2, 5/2], m=1).nqfi_lb ≈
+              (r.FQ .- 2 .* r.σFQ) ./ (12 * (1/4 + 25/4))
+        @test_throws ArgumentError qfi_bound(; S=1, spins=[1])
+        @test_throws ArgumentError qfi_bound(; spins=[1], N=2)
+        @test_throws ArgumentError qfi_bound()
+        @test_throws ArgumentError nqfi(r; bound=-1.0)
     end
 
     @testset "band decomposition" begin
@@ -159,20 +172,81 @@ end
         @test_throws ArgumentError band_supports(seg, size(Iqω)...; support=:bogus)
     end
 
+    @testset "q / −q symmetrization (no inversion symmetry)" begin
+        # Three-site spin-1/2 ring with a Dzyaloshinskii–Moriya term: S(q, ω) ≠ S(−q, ω).
+        L = 3
+        sx = ComplexF64[0 1; 1 0] / 2; sy = ComplexF64[0 -im; im 0] / 2; sz = ComplexF64[1 0; 0 -1] / 2
+        op(s, n) = kron([k == n ? s : Matrix{ComplexF64}(I, 2, 2) for k in 1:L]...)
+        Sx = [op(sx, n) for n in 1:L]; Sy = [op(sy, n) for n in 1:L]; Sz = [op(sz, n) for n in 1:L]
+        H = zeros(ComplexF64, 2^L, 2^L)
+        for n in 1:L
+            m = mod1(n + 1, L)
+            H += Sx[n] * Sx[m] + Sy[n] * Sy[m] + Sz[n] * Sz[m] + 0.6 * (Sx[n] * Sy[m] - Sy[n] * Sx[m])
+            H += 0.4 * (Sz[n] + 0.3Sx[n])
+        end
+        H = Hermitian(H)
+        q = 2π / 3
+        Oq = sum(cis(q * (n - 1)) * Sx[n] for n in 1:L)
+        X = (Oq + Oq') / 2; Y = (Oq - Oq') / (2im)
+        for T in (2.0, 5.0, 30.0)
+            β = 1 / (kB * T)
+            Fdef = _qfi_definition(H, X, β) + _qfi_definition(H, Y, β)
+            ωp, wp = _positive_lines(H, Oq, β)            # S(q, ω)
+            ωm, wm = _positive_lines(H, Oq', β)           # S(−q, ω), since Ô_q† = Ô_{−q}
+            ωgrid = sort(vcat(ωp, ωm)) .+ (1:(length(ωp) + length(ωm))) .* 1e-9
+            # one bin per line on the (nudged, strictly increasing) grid; row 1 = q, row 2 = −q
+            Sqω = zeros(2, length(ωgrid))
+            ωall = vcat(ωp, ωm); wall = vcat(wp, wm); tag = vcat(fill(1, length(ωp)), fill(2, length(ωm)))
+            ord = sortperm(ωall)
+            for (k, o) in enumerate(ord)
+                Sqω[tag[o], k] += wall[o]
+            end
+            @test !(sum(Sqω[1, :]) ≈ sum(Sqω[2, :]))      # genuinely asymmetric
+            Ssym, _, partner = symmetrize_q(Sqω, [q, -q])
+            @test partner == [2, 1]
+            r = qfi(Ssym, ωgrid, T; Δω=1.0)
+            @test r.FQ[1] ≈ Fdef rtol = 1e-6
+            @test r.FQ[2] ≈ Fdef rtol = 1e-6
+            @test !(qfi(Sqω, ωgrid, T; Δω=1.0).FQ[1] ≈ Fdef)  # S(q) alone is not the QFI
+        end
+
+        # Grid handling: vector momenta, custom partner map, missing partners, NaN, σ.
+        qs = [(h, 0.0) for h in -1.0:0.5:1.0]
+        S = reshape(collect(1.0:15.0), 5, 3); σ = fill(0.2, 5, 3); S[1, 2] = NaN
+        Ssym, σsym, partner = symmetrize_q(S, qs; σ=σ)
+        @test partner == [5, 4, 3, 2, 1]
+        @test Ssym[2, :] ≈ (S[2, :] .+ S[4, :]) ./ 2
+        @test Ssym[3, :] ≈ S[3, :] && σsym[3, :] ≈ σ[3, :]
+        @test σsym[2, :] ≈ fill(sqrt(2) * 0.2 / 2, 3)
+        @test isnan(Ssym[1, 2]) && isnan(Ssym[5, 2])
+        Ss = [1.0 2.0; 1.0 2.0]
+        @test symmetrize_q(Ss, [0.25, -0.25])[1] ≈ Ss
+        Sh, _, ph = symmetrize_q(S, [0.0, 0.5, 1.0, 1.5, 2.0])
+        @test ph == [1, 0, 0, 0, 0] && all(isnan, Sh[2:end, :])
+        _, _, pG = symmetrize_q(S, [0.0, 0.5, 1.0, 1.5, 2.0]; minus=q -> mod(-q, 2.0))
+        @test pG == [1, 4, 3, 2, 1]
+    end
+
     @testset "form factor and conversion to S_mag" begin
         # Reference values: periodictable (Brown, ITC Vol. C) Mn2+ <j0>.
-        @test magnetic_form_factor(0.0) ≈ 0.9992 atol = 1e-12
-        @test magnetic_form_factor(1.0) ≈ 0.9323149968067334 rtol = 1e-10
-        @test magnetic_form_factor(2.0) ≈ 0.7629713782168471 rtol = 1e-10
-        @test magnetic_form_factor(4.0) ≈ 0.37669841061323533 rtol = 1e-10
+        @test magnetic_form_factor(0.0, MN2_J0) ≈ 0.9992 atol = 1e-12
+        @test magnetic_form_factor(1.0, MN2_J0) ≈ 0.9323149968067334 rtol = 1e-10
+        @test magnetic_form_factor(2.0, MN2_J0) ≈ 0.7629713782168471 rtol = 1e-10
+        @test magnetic_form_factor(4.0, MN2_J0) ≈ 0.37669841061323533 rtol = 1e-10
+        @test_throws MethodError magnetic_form_factor(1.0)            # no default ion
+        @test_throws ArgumentError magnetic_form_factor(1.0, (1.0, 2.0))
 
         I = [1.0 2.0; 3.0 NaN]; σ = [0.1 0.2; 0.3 0.4]; Q = [0.0, 2.0]
-        S, σS = to_smag(I, Q; σ=σ)
-        F0, F2 = magnetic_form_factor(0.0), magnetic_form_factor(2.0)
+        @test_throws UndefKeywordError to_smag(I, Q)                  # form factor required
+        S, σS = to_smag(I, Q; σ=σ, form_factor=MN2_J0)
+        F0, F2 = magnetic_form_factor(0.0, MN2_J0), magnetic_form_factor(2.0, MN2_J0)
         @test S[1, :] ≈ 1.5 .* I[1, :] ./ F0^2
         @test S[2, 1] ≈ 1.5 * 3.0 / F2^2 && isnan(S[2, 2])
         @test σS ≈ 1.5 .* σ ./ [F0^2 F0^2; F2^2 F2^2]
+        Sf, _ = to_smag(I, Q; form_factor=Q -> magnetic_form_factor(Q, MN2_J0))
+        @test isequal(Sf, S)
         S1, _ = to_smag(I, Q; polarization=1, g=2, scale=2, form_factor=_ -> 1.0)
         @test S1[1, :] ≈ 2 .* I[1, :]
+        @test_throws ArgumentError to_smag(I, Q; form_factor=:Mn2)
     end
 end

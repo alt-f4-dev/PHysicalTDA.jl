@@ -59,9 +59,9 @@ export summarize_domain_branches
 
 include("QFI.jl") #Quantum Fisher information
 export KB_MEV_PER_K, qfi_kernel, energy_bin_widths, qfi_density
-export QFIResult, qfi, nqfi, nqfi_lower_bound, qfi_witness
+export QFIResult, qfi, qfi_bound, nqfi, nqfi_lower_bound, qfi_witness
 export BandQFIResult, band_supports, band_qfi, band_dependence
-export MN2_J0, magnetic_form_factor, to_smag
+export symmetrize_q, MN2_J0, magnetic_form_factor, to_smag
 
 
 #Lazy Plotting
