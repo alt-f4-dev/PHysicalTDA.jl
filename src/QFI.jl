@@ -315,7 +315,8 @@ at momentum row `iq`.
 
 Supports for a segmentation run on the rebinned grid of [`rebin_to_resolution`](@ref), mapped
 back to the original grid with [`upsample_mask`](@ref), so that band-resolved QFI can be computed
-at full resolution. Bins dropped by the rebinning belong to no band (they enter the residual).
+at full resolution. Bins dropped by the rebinning (`remainder = :drop`) belong to no band and
+enter the residual; use `remainder = :merge` to keep every bin.
 """
 function band_supports(result, nq::Integer, nω::Integer; support::Symbol=:components)
     if support === :components

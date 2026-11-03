@@ -70,9 +70,31 @@ using PHysicalTDA
         @test_throws DimensionMismatch upsample_mask(falses(2, 2), rb)
     end
 
+    @testset "remainder = :merge" begin
+        rd = rebin_to_resolution(I, qs, ωs; σ=σ, factors=(3, 5))
+        rm = rebin_to_resolution(I, qs, ωs; σ=σ, factors=(3, 5), remainder=:merge)
+        @test rd.remainder === :drop && rm.remainder === :merge
+        @test size(rm.I) == size(rd.I) == (13, 24)
+        @test last(rd.qblocks) == 37:39 && last(rm.qblocks) == 37:40
+        @test last(rd.ωblocks) == 116:120 && last(rm.ωblocks) == 116:121
+        @test rm.I[1:end-1, 1:end-1] == rd.I[1:end-1, 1:end-1]       # only the last blocks change
+        @test rm.I[end, end] ≈ mean(I[37:40, 116:121])
+        @test rm.σ[end, end] ≈ sqrt(sum(abs2, σ[37:40, 116:121])) / 24
+        @test rm.q[end] ≈ mean(qs[37:40]) && rm.ω[end] ≈ mean(ωs[116:121])
+        @test all(upsample_mask(trues(size(rm.I)), rm))                # every bin belongs to a block
+        @test count(upsample_mask(trues(size(rd.I)), rd)) == 39 * 120
+        ra = rebin_to_resolution(I, qs, ωs; factors=(3, 5), average=:all, remainder=:merge)
+        @test ra.I[end, end] ≈ mean(replace(I[37:40, 116:121], NaN => ra.fillvalue))
+        # an exact multiple is unaffected
+        @test isequal(rebin_to_resolution(I, qs, ωs; factors=(2, 11), remainder=:merge).I,
+                      rebin_to_resolution(I, qs, ωs; factors=(2, 11)).I)
+        @test occursin("remainder=:merge", sprint(show, rm))
+    end
+
     @testset "argument checks" begin
         @test_throws ArgumentError rebin_to_resolution(I, qs, ωs; fill=:mean)
         @test_throws ArgumentError rebin_to_resolution(I, qs, ωs; average=:median)
+        @test_throws ArgumentError rebin_to_resolution(I, qs, ωs; remainder=:pad)
         @test_throws DimensionMismatch rebin_to_resolution(I, qs[1:10], ωs)
         @test_throws DimensionMismatch rebin_to_resolution(I, qs, ωs; σ=σ[1:5, :])
         @test_throws ArgumentError rebin_to_resolution(I, qs, ωs; valid=trues(size(I)))
