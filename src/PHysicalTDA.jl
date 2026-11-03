@@ -57,6 +57,13 @@ export robust_branch_count
 export analyze_domain_topologies
 export summarize_domain_branches
 
+include("Rebinning.jl") #Resolution-matched rebinning
+export RebinResult, rebin_to_resolution, upsample_mask
+
+include("RidgeRecovery.jl") #Child ridges inside parent supports
+export RidgeRecoveryParams, RidgeSupportGroup, RidgeCandidates, ChildRidgeResult
+export find_ridge_candidates, recover_child_ridges, child_ridge_dispersions
+
 include("QFI.jl") #Quantum Fisher information
 export KB_MEV_PER_K, qfi_kernel, energy_bin_widths, qfi_density
 export QFIResult, qfi, qfi_bound, nqfi, nqfi_lower_bound, qfi_witness

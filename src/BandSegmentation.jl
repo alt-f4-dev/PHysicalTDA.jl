@@ -2027,14 +2027,56 @@ function splitbands(Iqω::AbstractMatrix{<:Real}, qs, ωs; kwargs...)
     return components_to_band_marginals(result)
 end
 
+"""
+    ridge_dispersions(Iqω, qs, ωs; kwargs...)
+    ridge_dispersions(result, qs, ωs; centre=:bin)
+
+Parent-band dispersions: the energy of each parent band at every momentum row.
+
+The first form runs [`adaptive_autosplitbands2d`](@ref) with `kwargs` and returns the energy of
+each parent's centre bin. The second form uses an existing `result` (run on `qs`, `ωs`) and does
+not repeat the segmentation:
+
+- `centre = :bin` returns the centre-bin energy, identical to the first form;
+- `centre = :weighted` returns the intensity-weighted mean energy of the smoothed map minus its
+  background, over `±result.radius_ω` bins around the centre bin (the centre-bin energy where that
+  window carries no weight).
+
+Returns `(q, ω, center_indices, imputed)`, where `ω` and `center_indices` are `nparents × nq` and
+`imputed[b, iq]` marks centres filled in rather than observed.
+"""
 function ridge_dispersions(Iqω::AbstractMatrix{<:Real}, qs, ωs; kwargs...)
     result = adaptive_autosplitbands2d(Iqω, qs, ωs; kwargs...)
+    return _ridge_dispersions(result, qs, ωs, :bin)   # unchecked, as before
+end
+
+function ridge_dispersions(result::NamedTuple, qs, ωs; centre::Symbol=:bin)
+    centre in (:bin, :weighted) || throw(ArgumentError("centre must be :bin or :weighted; got $centre."))
+    nq = size(result.qfirst.centers, 2)
+    length(qs) == nq || throw(DimensionMismatch("qs has $(length(qs)) entries; the segmentation has $nq rows."))
+    return _ridge_dispersions(result, qs, ωs, centre)
+end
+
+function _ridge_dispersions(result, qs, ωs, centre::Symbol)
     centers = result.qfirst.centers
     nparents, nq = size(centers)
 
     dispersions = Matrix{Float64}(undef, nparents, nq)
-    @inbounds for b in 1:nparents, iq in 1:nq
-        dispersions[b, iq] = Float64(ωs[centers[b, iq]])
+    if centre === :bin
+        @inbounds for b in 1:nparents, iq in 1:nq
+            dispersions[b, iq] = Float64(ωs[centers[b, iq]])
+        end
+    else
+        S, bg, rω = result.smooth, result.background, result.radius_ω
+        size(S, 2) == length(ωs) ||
+            throw(DimensionMismatch("ωs has $(length(ωs)) entries; the segmentation has $(size(S, 2)) columns."))
+        @inbounds for b in 1:nparents, iq in 1:nq
+            j₀ = centers[b, iq]
+            lo, hi = max(1, j₀ - rω), min(length(ωs), j₀ + rω)
+            w = max.(@view(S[iq, lo:hi]) .- bg, 0.0)
+            wsum = sum(w)
+            dispersions[b, iq] = wsum > 0 ? sum(w .* @view(ωs[lo:hi])) / wsum : Float64(ωs[j₀])
+        end
     end
 
     return (q = Float64.(qs), ω = dispersions,
