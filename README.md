@@ -54,7 +54,9 @@ dm  = domain_marginals(Iqω, seg, qs, ωs)
 | Topological invariants | `persistence_entropy`, `persistence_entropy_curve`, `betti_curve`, `betti_curvature` |
 | Naive (slice-wise) partitions of spectral weight | `partition_marginals`, `slice_partition_marginals`, `merge_energy_bands!` |
 | Physical band segmentation | `adaptive_autosplitbands2d`, `components_to_band_marginals`, `splitbands` |
+| Resolution-matched rebinning | `rebin_to_resolution`, `upsample_mask` |
 | Ridge topology | `build_ridge_topology`, `ridge_dispersions` |
+| Child-ridge recovery | `find_ridge_candidates`, `recover_child_ridges`, `child_ridge_dispersions`, `RidgeRecoveryParams` |
 | Parent-band domains | `restrict_to_domain`, `domain_marginals`, `analyze_domain_topologies`, `summarize_domain_branches`, `robust_branch_count` |
 | Quantum Fisher information | `qfi_kernel`, `qfi`, `qfi_bound`, `nqfi`, `nqfi_lower_bound`, `qfi_witness`, `band_qfi`, `band_supports`, `band_dependence`, `symmetrize_q`, `to_smag`, `magnetic_form_factor` |
 | Linear spin-wave theory with `Sunny.jl` | `LSWT`, `convert4D`, `collapse`, `La2CuO4`, `TMMC` |
@@ -97,6 +99,27 @@ Nothing in the QFI functions is specific to a material:
 The relative contributions `ξ_b` do not depend on the absolute scale. `nQFI` and `G_m` require an
 isolated, absolutely normalized magnetic response; `to_smag` performs the conversion only when called.
 
+## Rebinning and child-ridge recovery
+
+Measured maps are usually rebinned to about one resolution width before segmentation. The QFI is
+then computed on the original grid with the parent-band supports mapped back to it.
+
+```julia
+rb  = rebin_to_resolution(Iqω, qs, ωs; σ=σI)                 # unmeasured (NaN) bins are not averaged
+seg = adaptive_autosplitbands2d(rb.I, rb.q, rb.ω; resolution_q=rb.resolution_q, resolution_ω=rb.resolution_ω)
+disp = ridge_dispersions(seg, rb.q, rb.ω; centre=:weighted)  # parent-band dispersions, no re-segmentation
+br  = band_qfi(Smag, band_supports(seg, rb), ωs, T; σ=σS)    # supports on the original grid
+
+# Individual ridges inside each parent, with split, merge and crossing points
+cr = recover_child_ridges(rb.I, rb.q, rb.ω)                  # RidgeRecoveryParams() = manuscript settings
+child_ridge_dispersions(cr).segments
+```
+
+`rebin_to_resolution(...; average=:all)` and the default `RidgeRecoveryParams()` reproduce the
+manuscript workflow exactly. The default ridge settings connect a ridge across momentum rows only
+when it moves by about one energy bin or less between rows; for steep dispersions on coarse grids,
+`RidgeRecoveryParams(ωs; max_slope)` scales the support widths and tolerances to the energy bin.
+
 ## Optional conventions
 
 Each of these keywords defaults to the established behaviour, so existing results do not change unless an
@@ -107,6 +130,16 @@ alternative is requested.
 | `essential_cap` | `pd_array_intensities`, `pd_sunny_intensities` (with `make_death_finite=true`) | `:max_death`: each infinite death is capped at the largest finite death in that degree | `:threshold`: cap at the filtration value where the complex is complete (for a superlevel filtration, the background intensity) |
 | `interval` | `betti_curve`, `betti_curvature` | `:closed`: a class is alive on [b, d] | `:halfopen`: alive on [b, d), the rank H_p convention |
 | `peak_selection` | `partition_marginals`, `slice_partition_marginals` | `:height`: partition centres at the highest local maxima of each slice | `:persistence`: partition centres at the births of the most persistent H₀ classes (same number of partitions) |
+
+## Unreleased
+
+- New: `rebin_to_resolution`, `upsample_mask` and `band_supports(result, rebin)` (resolution-matched
+  rebinning and supports on the original grid).
+- New: `ridge_dispersions(result, qs, ωs; centre)` uses an existing segmentation; `centre=:weighted`
+  gives intensity-weighted parent-band energies. The existing method is unchanged.
+- New: child-ridge recovery (`find_ridge_candidates`, `recover_child_ridges`, `child_ridge_dispersions`,
+  `RidgeRecoveryParams`), ported from the manuscript scripts.
+- No existing function changed behaviour.
 
 ## Changes in 0.1.2
 

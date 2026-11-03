@@ -310,6 +310,12 @@ For an [`adaptive_autosplitbands2d`](@ref) result:
 
 A domain list is indexed as `domains[iq][b]`, an energy-index range for parent `b`
 at momentum row `iq`.
+
+    band_supports(result, rebin::RebinResult; support=:components)
+
+Supports for a segmentation run on the rebinned grid of [`rebin_to_resolution`](@ref), mapped
+back to the original grid with [`upsample_mask`](@ref), so that band-resolved QFI can be computed
+at full resolution. Bins dropped by the rebinning belong to no band (they enter the residual).
 """
 function band_supports(result, nq::Integer, nω::Integer; support::Symbol=:components)
     if support === :components
@@ -331,6 +337,11 @@ function band_supports(result, nq::Integer, nω::Integer; support::Symbol=:compo
     else
         throw(ArgumentError("support must be :components or :domains; got $support."))
     end
+end
+
+function band_supports(result, rebin::RebinResult; support::Symbol=:components)
+    mq, mω = size(rebin.I)
+    return [upsample_mask(M, rebin) for M in band_supports(result, mq, mω; support=support)]
 end
 
 function band_supports(domains::AbstractVector, nq::Integer, nω::Integer)
