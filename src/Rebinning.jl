@@ -17,8 +17,10 @@ Fields:
 - `q`, `ω` :: block centres (means of the original bin centres in each block).
 - `qfactor`, `ωfactor` :: block size in original bins.
 - `resolution_q`, `resolution_ω` :: resolution widths used to choose the block size.
-- `source_size` :: `(nq, nω)` of the original grid. Trailing bins that do not fill a whole
-  block (`source_size .- (qfactor, ωfactor) .* size(I)`) are dropped.
+- `source_size` :: `(nq, nω)` of the original grid.
+- `qblocks`, `ωblocks` :: the original bin indices of each block along each axis.
+- `remainder` :: `:drop` or `:merge`, how trailing bins that do not fill a whole block were handled
+  (see [`rebin_to_resolution`](@ref)).
 - `fillvalue`, `nfilled` :: value given to unmeasured bins and how many original bins had it.
 - `average` :: `:valid` or `:all` (see [`rebin_to_resolution`](@ref)).
 """
@@ -36,25 +38,34 @@ struct RebinResult
     fillvalue::Float64
     nfilled::Int
     average::Symbol
+    qblocks::Vector{UnitRange{Int}}
+    ωblocks::Vector{UnitRange{Int}}
+    remainder::Symbol
 end
 
 function Base.show(io::IO, r::RebinResult)
     print(io, "RebinResult($(r.source_size[1])×$(r.source_size[2]) → $(size(r.I, 1))×$(size(r.I, 2)), ",
           "factors=($(r.qfactor), $(r.ωfactor)), Γq=$(round(r.resolution_q; sigdigits=4)), ",
-          "Γω=$(round(r.resolution_ω; sigdigits=4)), average=:$(r.average))")
+          "Γω=$(round(r.resolution_ω; sigdigits=4)), average=:$(r.average), remainder=:$(r.remainder))")
 end
 
 """
     rebin_to_resolution(I, qs, ωs; σ=nothing, valid=nothing, resolution_q=nothing,
                         resolution_ω=nothing, factors=nothing, fill=:noise_floor,
-                        average=:valid) -> RebinResult
+                        average=:valid, remainder=:drop) -> RebinResult
 
 Average `I` (`nq × nω`, rows = momentum, columns = energy) over blocks of `qfactor × ωfactor`
 bins, where each factor is the resolution width in bins, `clamp(round(Γ/Δ), 1, n)`.
 
 The widths `Γq`, `Γω` come from `resolution_q`, `resolution_ω` when given, and are otherwise
 estimated from the data as in [`adaptive_autosplitbands2d`](@ref). `factors = (qfactor, ωfactor)`
-sets the block size directly. Trailing bins that do not fill a block are dropped.
+sets the block size directly.
+
+`remainder` selects what happens to trailing bins that do not fill a whole block:
+
+- `:drop` (default) leaves them out, as in the manuscript workflow; they belong to no block and
+  map back as `false` in [`upsample_mask`](@ref);
+- `:merge` adds them to the last block along that axis, so every original bin belongs to a block.
 
 Unmeasured bins are those with `valid[i, j] == false`; by default every non-finite `I` (or `σ`).
 They are given the value set by `fill`: `:noise_floor` (the smallest positive measured value) or
@@ -78,7 +89,7 @@ function rebin_to_resolution(I::AbstractMatrix{<:Real}, qs::AbstractVector{<:Rea
                              valid::Union{Nothing,AbstractMatrix{Bool}}=nothing,
                              resolution_q=nothing, resolution_ω=nothing,
                              factors::Union{Nothing,Tuple{Integer,Integer}}=nothing,
-                             fill::Symbol=:noise_floor, average::Symbol=:valid)
+                             fill::Symbol=:noise_floor, average::Symbol=:valid, remainder::Symbol=:drop)
     nq, nω = size(I)
     length(qs) == nq || throw(DimensionMismatch("qs has $(length(qs)) entries; I has $nq rows."))
     length(ωs) == nω || throw(DimensionMismatch("ωs has $(length(ωs)) entries; I has $nω columns."))
@@ -86,6 +97,7 @@ function rebin_to_resolution(I::AbstractMatrix{<:Real}, qs::AbstractVector{<:Rea
     σ === nothing || size(σ) == size(I) || throw(DimensionMismatch("σ must have the size of I."))
     fill in (:noise_floor, :zero) || throw(ArgumentError("fill must be :noise_floor or :zero; got $fill."))
     average in (:valid, :all) || throw(ArgumentError("average must be :valid or :all; got $average."))
+    remainder in (:drop, :merge) || throw(ArgumentError("remainder must be :drop or :merge; got $remainder."))
 
     if valid === nothing
         mask = BitMatrix(isfinite.(I))
@@ -117,19 +129,21 @@ function rebin_to_resolution(I::AbstractMatrix{<:Real}, qs::AbstractVector{<:Rea
         (min(Int(factors[1]), nq), min(Int(factors[2]), nω))
     end
     mq, mω = fld(nq, qf), fld(nω, ωf)
+    blocks(n, f, m) = [(i-1)*f+1:(remainder === :merge && i == m ? n : i*f) for i in 1:m]
+    qblk, ωblk = blocks(nq, qf, mq), blocks(nω, ωf, mω)
 
     Ib = Matrix{Float64}(undef, mq, mω)
     σb = σ === nothing ? nothing : Matrix{Float64}(undef, mq, mω)
     vb = falses(mq, mω)
-    qb = [mean(@view qv[(i-1)*qf+1:i*qf]) for i in 1:mq]
-    ωb = [mean(@view ωv[(j-1)*ωf+1:j*ωf]) for j in 1:mω]
+    qb = [mean(@view qv[r]) for r in qblk]
+    ωb = [mean(@view ωv[r]) for r in ωblk]
     @inbounds for i in 1:mq, j in 1:mω
-        rq, rω = (i-1)*qf+1:i*qf, (j-1)*ωf+1:j*ωf
+        rq, rω = qblk[i], ωblk[j]
         nvalid = count(@view mask[rq, rω])
         vb[i, j] = nvalid > 0
         if average === :all
             Ib[i, j] = mean(@view Ifill[rq, rω])
-            n = qf * ωf
+            n = length(rq) * length(rω)
         elseif nvalid > 0
             s = 0.0
             for jj in rω, ii in rq
@@ -153,22 +167,23 @@ function rebin_to_resolution(I::AbstractMatrix{<:Real}, qs::AbstractVector{<:Rea
             end
         end
     end
-    return RebinResult(Ib, σb, vb, qb, ωb, qf, ωf, Γq, Γω, (nq, nω), fillvalue, nfilled, average)
+    return RebinResult(Ib, σb, vb, qb, ωb, qf, ωf, Γq, Γω, (nq, nω), fillvalue, nfilled, average,
+                       qblk, ωblk, remainder)
 end
 
 """
     upsample_mask(M, rebin::RebinResult) -> BitMatrix
 
 Map a mask `M` on the rebinned grid back to the original grid: every original bin in a block
-takes the block's value. Bins dropped by the rebinning are `false`. Disjoint masks stay disjoint.
+takes the block's value. Bins dropped by the rebinning (`remainder = :drop`) are `false`.
+Disjoint masks stay disjoint.
 """
 function upsample_mask(M::AbstractMatrix{Bool}, rebin::RebinResult)
     size(M) == size(rebin.I) ||
         throw(DimensionMismatch("mask is $(size(M)); the rebinned grid is $(size(rebin.I))."))
-    qf, ωf = rebin.qfactor, rebin.ωfactor
     F = falses(rebin.source_size)
     @inbounds for j in axes(M, 2), i in axes(M, 1)
-        M[i, j] && (F[(i-1)*qf+1:i*qf, (j-1)*ωf+1:j*ωf] .= true)
+        M[i, j] && (F[rebin.qblocks[i], rebin.ωblocks[j]] .= true)
     end
     return F
 end

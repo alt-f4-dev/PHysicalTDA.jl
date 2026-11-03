@@ -105,7 +105,7 @@ Measured maps are usually rebinned to about one resolution width before segmenta
 then computed on the original grid with the parent-band supports mapped back to it.
 
 ```julia
-rb  = rebin_to_resolution(Iqω, qs, ωs; σ=σI)                 # unmeasured (NaN) bins are not averaged
+rb  = rebin_to_resolution(Iqω, qs, ωs; σ=σI, remainder=:merge)  # NaN bins not averaged; no bins dropped
 seg = adaptive_autosplitbands2d(rb.I, rb.q, rb.ω; resolution_q=rb.resolution_q, resolution_ω=rb.resolution_ω)
 disp = ridge_dispersions(seg, rb.q, rb.ω; centre=:weighted)  # parent-band dispersions, no re-segmentation
 br  = band_qfi(Smag, band_supports(seg, rb), ωs, T; σ=σS)    # supports on the original grid
@@ -139,6 +139,8 @@ alternative is requested.
   gives intensity-weighted parent-band energies. The existing method is unchanged.
 - New: child-ridge recovery (`find_ridge_candidates`, `recover_child_ridges`, `child_ridge_dispersions`,
   `RidgeRecoveryParams`), ported from the manuscript scripts.
+- `rebin_to_resolution(...; remainder=:merge)` adds trailing bins that do not fill a block to the
+  last block, so every original bin keeps a parent-band support. The default, `:drop`, is unchanged.
 - No existing function changed behaviour.
 
 ## Changes in 0.1.2
