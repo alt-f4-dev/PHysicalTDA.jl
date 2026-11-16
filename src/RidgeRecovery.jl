@@ -34,6 +34,7 @@ Fields:
 | `min_prominence` | 0.005 | absolute prominence of a candidate peak |
 | `relative_score_floor` | 0.0035 | candidate score floor relative to the strongest peak |
 | `max_peaks_per_slice` | 16 | candidates kept per momentum slice |
+| `include_energy_edges` | false | also accept a maximum in the first or last energy bin as a candidate |
 | `support_fraction` | 0.95 | a support extends while the normalized intensity is ≥ this fraction of the peak |
 | `support_min_level` | 0.001 | absolute floor of that threshold |
 | `support_max_half_width` | 0.22 | largest support half-width (energy) |
@@ -56,6 +57,7 @@ Base.@kwdef struct RidgeRecoveryParams
     min_prominence::Float64 = 0.005
     relative_score_floor::Float64 = 0.0035
     max_peaks_per_slice::Int = 16
+    include_energy_edges::Bool = false
     support_fraction::Float32 = 0.95f0
     support_min_level::Float32 = 0.001f0
     support_max_half_width::Float32 = 0.22f0
@@ -172,7 +174,10 @@ end
     find_ridge_candidates(I, qs, ωs; params=RidgeRecoveryParams(), periodic_q=false) -> RidgeCandidates
 
 Local peak candidates of each momentum row of `I` (`nq × nω`), found with
-[`build_ridge_topology`](@ref), and their energy supports. A support extends from a peak while
+[`build_ridge_topology`](@ref), and their energy supports. By default only interior maxima count;
+with `params.include_energy_edges = true` a maximum in the first or last energy bin is a candidate
+too, which is needed when a dispersion minimum (or maximum) lies at the edge of a clipped energy
+window. A support extends from a peak while
 the normalized intensity stays above `max(support_min_level, support_fraction × peak)`, up to
 `support_max_half_width`; supports within `support_touch` of each other are joined into one
 [`RidgeSupportGroup`](@ref).
@@ -185,7 +190,7 @@ function find_ridge_candidates(Iqω::AbstractMatrix{<:Real}, qs, ωs;
     I = Matrix{Float32}(Iqω); q = Float32.(qs); ω = Float32.(ωs)
     A = _ridge_smooth_normalize(I, p.peak_smooth_radius)
     seed = build_ridge_topology(I, q, ω; smooth_radius_ω=p.peak_smooth_radius,
-                                min_prominence=p.min_prominence, max_peaks_per_slice=p.max_peaks_per_slice,
+                                include_energy_edges=p.include_energy_edges, min_prominence=p.min_prominence, max_peaks_per_slice=p.max_peaks_per_slice,
                                 relative_score_floor=p.relative_score_floor, max_jump_bins=nothing, tube_radius_ω=1,
                                 periodic_q=periodic_q, min_cycle_confidence=1.0)
     nodes = seed.nodes; nq, nω = size(I)

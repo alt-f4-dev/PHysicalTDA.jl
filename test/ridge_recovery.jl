@@ -45,6 +45,22 @@ using PHysicalTDA
         @test maximum(abs.(vec(t.tracks[1]) .- truth)) <= 2Δω
     end
 
+    @testset "dispersion minimum on the lowest energy bin" begin
+        # A V-shaped band whose minimum sits in the first bin of a clipped window: without edge
+        # maxima the rows near the minimum have no candidate and the band splits into two parents.
+        ωe = collect(0.45:0.4:8.0)
+        truth = ωe[1] .+ 12 .* abs.(qs .- 0.5)
+        I = [Lor(ω, ω0, 0.3) for ω0 in truth, ω in ωe]
+        @test RidgeRecoveryParams().include_energy_edges == false
+        t0 = recover_child_ridges(I, qs, ωe; params=RidgeRecoveryParams(ωe; max_slope=20))
+        @test length(t0.parent_groups) == 2
+        t = recover_child_ridges(I, qs, ωe; params=RidgeRecoveryParams(ωe; max_slope=20, include_energy_edges=true))
+        @test length(t.parent_groups) == 1 && t.global_children == [1]
+        @test maximum(abs.(vec(t.tracks[1]) .- truth)) <= 2(ωe[2] - ωe[1])
+        d = child_ridge_dispersions(t)
+        @test length(d.segments) == 1 && extrema(d.segments[1].q) == (Float32(qs[1]), Float32(qs[end]))
+    end
+
     @testset "separate flat bands" begin
         I = [Lor(ω, 3.0, 0.15) + 0.6Lor(ω, 7.0, 0.15) for _ in qs, ω in ωs]
         t = recover_child_ridges(I, qs, ωs)

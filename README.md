@@ -141,6 +141,9 @@ alternative is requested.
   `RidgeRecoveryParams`), ported from the manuscript scripts.
 - `rebin_to_resolution(...; remainder=:merge)` adds trailing bins that do not fill a block to the
   last block, so every original bin keeps a parent-band support. The default, `:drop`, is unchanged.
+- `RidgeRecoveryParams(; include_energy_edges=true)` lets `find_ridge_candidates` and
+  `recover_child_ridges` accept maxima in the first or last energy bin, for dispersion extrema at
+  the edge of a clipped energy window. The default, `false`, is unchanged.
 - No existing function changed behaviour.
 
 ## Changes in 0.1.2
