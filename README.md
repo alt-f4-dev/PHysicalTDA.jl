@@ -11,7 +11,7 @@
 
 `PHysicalTDA.jl` performs Topological Data Analysis (TDA) by utilizing Persistent Homology (PH) on scattering datasets.
 It is written to handle both synthetic and raw datasets. The module currently supports Julia native and `Sunny.jl` types.
-It will support NXS, JLD2, and ASCII datasets for analysis of raw measurements in the future.
+Mantid `SaveMD` v2 histogram files (`.nxs`) and MDNorm workspace pairs can be read directly.
 
 ## Installation
 
@@ -61,11 +61,40 @@ dm  = domain_marginals(Iqω, seg, qs, ωs)
 | Quantum Fisher information | `qfi_kernel`, `qfi`, `qfi_bound`, `nqfi`, `nqfi_lower_bound`, `qfi_witness`, `band_qfi`, `band_supports`, `band_dependence`, `symmetrize_q`, `to_smag`, `magnetic_form_factor` |
 | Linear spin-wave theory with `Sunny.jl` | `LSWT`, `convert4D`, `collapse`, `La2CuO4`, `TMMC` |
 | Robust statistics | `MAD` |
-| File I/O | `saveHDF5`, `loadHDF5`, `h5tree` |
+| HDF5 and NeXus inspection | `saveHDF5`, `loadHDF5`, `h5tree` |
+| Mantid MDHistograms and MDNorm | `load_mdhisto`, `load_mdnorm`, `eachslice_mdnorm`, `intensity`, `uncertainty`, `measured` |
 
 The cubical complex and the filtrations built on intensity data are described on the
 [Conventions](https://alt-f4-dev.github.io/PHysicalTDA.jl/dev/conventions/) page; each function's
 docstring documents its keywords.
+
+## Mantid histograms
+
+```julia
+using PHysicalTDA
+
+path_D, path_N = "sample_D.nxs", "sample_N.nxs"
+h5tree(path_D; keypath="/MDHistoWorkspace/data", attributes=true, values=true, maxchildren=16)
+h = load_mdnorm(path_D, path_N; path_I="sample_I.nxs")
+I, σ, valid = intensity(h), uncertainty(h), measured(h)
+energy_dim = energy_axis(h)
+Ei = incident_energy(h)
+```
+
+Use `load_mdhisto` for a single workspace. The histogram carries `edges`, `centres`, `names`, `units`, and `frames` in `D0, D1, …` axis order. Older files with named axis datasets use the order presented by HDF5.jl. `hkl_centres(h)` returns a matrix with one stored HKL column per momentum bin. Integrated axes retain a single bin. Edge arrays are used directly, while centre arrays are converted to edges using adjacent midpoints and outer half-widths. A singleton centre requires a positive `bin_width` attribute. When an axis order is ambiguous, provide a `signal` dataset `axes` attribute, as Mantid does.
+
+For MDNorm, keep `h.D`, `h.D2`, and `h.N` when combining bins. `intensity(h)` gives `D/N` and `uncertainty(h)` gives `sqrt(D2)/N` where `N > 0`. Both return `NaN` outside measured bins. If the numerator file has no variance, `h.D2` and `uncertainty(h)` are `nothing`. The optional `path_I` checks the saved ratio on measured bins.
+
+Use `lattice`, `orientation_matrix`, `incident_energy`, `projection`, `goniometer`, and `run_title` for experiment metadata. Each accessor takes a zero-based `run` keyword identifying the Mantid `experimentN` group and returns `nothing` if its metadata is absent. Histograms retain the records under `h.meta.runs`; use `metadata=false` to skip them.
+
+For a large `(H, K, E, L)` workspace, pass contiguous bin ranges or `:` in axis order. A slice callback receives a histogram with a singleton sliced dimension and its physical centre.
+
+```julia
+subset = load_mdnorm(path_D, path_N; ranges=(:, :, 5:20, 3:3))
+eachslice_mdnorm(path_D, path_N; dim=4, ranges=(:, :, 5:20, :), metadata=false) do slice, L
+    @info "Momentum slice" L measured_bins=count(measured(slice))
+end
+```
 
 ## Quantum Fisher information
 

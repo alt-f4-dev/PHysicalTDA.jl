@@ -45,7 +45,7 @@ This enforces a structured scientific database layout where:
   Top-level group name in the HDF5 hierarchy.
 
 # Notes
-- Data is appended to the file (`"a"` mode), allowing multiple sweeps and methods to coexist.
+- Data is appended to the file, allowing multiple sweeps and methods to coexist.
 - Metadata stored in `results.meta` is written to:
 
       root/crystal/LSWT/sweepParam/sweepValue/meta/
@@ -56,7 +56,7 @@ function saveHDF5(crystal::String, sweepParam::String, sweepValue::String,
                   qnames::Vector{String}, results::LSWTResults; 
                   fname::String="crystal-data", root::String="crystals")
     method = "LSWT"
-    h5open(fname*".h5", "a") do h5
+    h5open(fname*".h5", "cw") do h5
         basepath = "$root/$crystal/$method/$sweepParam/$sweepValue"
         for (idx, name) in enumerate(qnames)
             path = "$basepath/$name"
@@ -129,81 +129,122 @@ end
 #----------------#
 # HDF5 Structure #
 #----------------#
-function _print_tree(node, prefix::String, is_last::Bool, depth::Int, maxdepth::Int)
-    depth >= maxdepth && return
-    
-    # Get all keys
-    keys_list = keys(node)
-    n = length(keys_list)
-    
-    for (i, key) in enumerate(keys_list)
-        is_last_item = (i == n)
-        
-        # Print current item
-        branch = is_last_item ? "└── " : "├── "
-        item = node[key]
-        
-        if isa(item, HDF5.Group)
-            println(prefix * branch * key * "/")
-            # Recurse into group
-            new_prefix = prefix * (is_last_item ? "    " : "│   ")
-            _print_tree(item, new_prefix, is_last_item, depth + 1, maxdepth)
-        else
-            # Dataset - show type and shape
-            dims = size(item)
-            dtype = eltype(item)
-            dims_str = isempty(dims) ? "scalar" : join(dims, "×")
-            println(prefix * branch * key * "  [$dtype: $dims_str]")
-        end
+function _with_h5_object(f, parent, name::AbstractString)
+    obj = parent[name]
+    try
+        return f(obj)
+    finally
+        close(obj)
     end
 end
+
+function _tree_preview(value, maxstring::Int)
+    if value isa AbstractString
+        prefix = first(value, maxstring)
+        return repr(length(prefix) == length(value) ? prefix : prefix * "…")
+    elseif value isa AbstractArray
+        return "[" * join((_tree_preview(item, maxstring) for item in value), ", ") * "]"
+    end
+    return repr(value)
+end
+
+function _tree_has_preview(item)
+    dims = size(item)
+    dims === nothing && return false
+    # Cap previews by element count and fixed-width storage size before doing any data I/O.
+    count = prod(dims)
+    0 < count <= 8 || return false
+    dtype = HDF5.datatype(item)
+    try
+        return sizeof(dtype) <= 65_536 ÷ count
+    finally
+        close(dtype)
+    end
+end
+
+function _print_tree_attributes(node, prefix, options)
+    options.attributes || return
+    attrs = HDF5.attributes(node)
+    names = keys(attrs)
+    for name in Iterators.take(names, options.maxchildren)
+        item = attrs[name]
+        try
+            preview = _tree_has_preview(item) ? _tree_preview(read(item), options.maxstring) : "(preview omitted)"
+            println(options.io, prefix, "@", name, " = ", preview)
+        finally
+            close(item)
+        end
+    end
+    length(names) > options.maxchildren && println(options.io, prefix, "… ", length(names) - options.maxchildren,
+                                                  " more attributes")
+end
+
+function _print_tree_dataset(item, options)
+    dims = size(item)
+    dims_str = dims === nothing ? "empty" : isempty(dims) ? "scalar" : join(dims, "×")
+    print(options.io, "  [", eltype(item), ": ", dims_str, "]")
+    if options.values && _tree_has_preview(item)
+        print(options.io, " = ", _tree_preview(read(item), options.maxstring))
+    end
+    println(options.io)
+end
+
+function _print_tree_item(item, child_prefix, depth, options)
+    if item isa HDF5.Group
+        println(options.io, "/")
+        _print_tree_attributes(item, child_prefix, options)
+        _print_tree(item, child_prefix, depth, options)
+    elseif item isa HDF5.Dataset
+        _print_tree_dataset(item, options)
+        _print_tree_attributes(item, child_prefix, options)
+    else
+        println(options.io, "  [", typeof(item), "]")
+    end
+end
+
+function _print_tree(node, prefix, depth, options)
+    depth >= options.maxdepth && return
+    names = keys(node)
+    for (i, name) in enumerate(Iterators.take(names, options.maxchildren))
+        last = i == length(names)
+        print(options.io, prefix, last ? "└── " : "├── ", name)
+        child_prefix = prefix * (last ? "    " : "│   ")
+        _with_h5_object(node, name) do item
+            _print_tree_item(item, child_prefix, depth + 1, options)
+        end
+    end
+    length(names) > options.maxchildren && println(options.io, prefix, "└── … ", length(names) - options.maxchildren,
+                                                  " more children")
+end
+
 """
-    h5tree(fname; keypath=nothing, maxdepth=Inf)
+    h5tree(fname; keypath=nothing, maxdepth=typemax(Int), attributes=false, values=false, maxchildren=typemax(Int), maxstring=200, io=stdout)
 
-Display HDF5 file structure in tree format.
+Print an HDF5 or NeXus tree to `io`. Open an existing path directly and otherwise try the legacy `.h5` suffix. Set `keypath` to inspect one group or dataset.
 
-# Arguments
-- `fname::String`: HDF5 filename (without .h5 extension)
-- `keypath::Union{String,Nothing}`: Start from specific path (default: root)
-- `maxdepth::Int`: Maximum depth to display (default: Inf = all levels)
-
-# Examples
-```julia
-#Show entire file
-h5tree("crystal-data")
-
-#Show specific subtree
-h5tree("crystal-data"; keypath="crystals/La2CuO4")
-
-#Limit depth
-h5tree("crystal-data"; keypath="crystals/La2CuO4/LSWT", maxdepth=1)
-```
+Enable `attributes` to display attributes and `values` to preview scalar and short datasets. `maxchildren` limits the children and attributes displayed per object, and `maxstring` limits each string preview in characters. Large fixed-width values are omitted.
 """
-function h5tree(fname::String; keypath::Union{String,Nothing}=nothing, maxdepth::Int=typemax(Int))
-    h5open(fname * ".h5", "r") do h5
-        root = keypath === nothing ? h5 : h5[keypath]
-        
-        if keypath === nothing
-            # At root - show filename as root
-            println(fname * ".h5")
-            _print_tree(root, "", true, 0, maxdepth)
+function h5tree(fname::AbstractString; keypath::Union{Nothing,AbstractString}=nothing, maxdepth::Int=typemax(Int),
+                attributes::Bool=false, values::Bool=false, maxchildren::Int=typemax(Int), maxstring::Int=200, io::IO=stdout)
+    min(maxdepth, maxchildren, maxstring) >= 0 || throw(ArgumentError("tree limits must be nonnegative"))
+    path = isfile(fname) ? fname : fname * ".h5"
+    options = (; maxdepth, attributes, values, maxchildren, maxstring, io)
+    h5open(path, "r") do file
+        if keypath === nothing || keypath == "/"
+            println(io, path)
+            _print_tree_attributes(file, "", options)
+            _print_tree(file, "", 0, options)
         else
-            # Strip trailing slashes
             clean_path = rstrip(keypath, '/')
-            
-            # At keypath - show as root with connecting branch
-            parts = split(clean_path, '/')
-            parent_path = join(parts[1:end-1], '/')
-            node_name = parts[end]
-            
-            if !isempty(parent_path)
-                println(parent_path * "/")
-                println("└── " * node_name * "/")
-                _print_tree(root, "    ", true, 0, maxdepth)
-            else
-                println(node_name * "/")
-                _print_tree(root, "    ", true, 0, maxdepth)
+            parts = rsplit(clean_path, '/'; limit=2)
+            name = last(parts)
+            parent_path = length(parts) == 2 ? first(parts) : ""
+            isempty(parent_path) || println(io, parent_path, "/")
+            print(io, isempty(parent_path) ? "" : "└── ", name)
+            _with_h5_object(file, keypath) do item
+                _print_tree_item(item, "    ", 0, options)
             end
         end
     end
+    return nothing
 end

@@ -17,12 +17,16 @@ export birth, death, PersistenceImage
 include("CoreUtils.jl")
 include("DataTypes.jl")
 include("DataUtils.jl")
+include("MantidIO.jl")
 
 #Result containers
 export LSWTResults
 
 #File IO
 export saveHDF5, loadHDF5, h5tree
+export MDHistogram, NormalizedHistogram, load_mdhisto, load_mdnorm, eachslice_mdnorm
+export intensity, uncertainty, measured, axis_vector, energy_axis, hkl_centres
+export lattice, orientation_matrix, incident_energy, projection, goniometer, run_title
 export @name
 
 
