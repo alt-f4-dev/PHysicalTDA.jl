@@ -201,8 +201,9 @@ cr = recover_child_ridges(rb.I, rb.q, rb.ω)                  # RidgeRecoveryPar
 child_ridge_dispersions(cr).segments
 ```
 
-`rebin_to_resolution(...; average=:all)` and the default `RidgeRecoveryParams()` reproduce the
-manuscript workflow exactly. The default ridge settings connect a ridge across momentum rows only
+`rebin_to_resolution(...; average=:all)` and `RidgeRecoveryParams(; include_energy_edges=false)` reproduce
+the manuscript workflow exactly; its ridge scripts must also pass `include_energy_edges=false` to
+`build_ridge_topology`, whose default is now `true`. The default ridge settings connect a ridge across momentum rows only
 when it moves by about one energy bin or less between rows; for steep dispersions on coarse grids,
 `RidgeRecoveryParams(ωs; max_slope)` scales the support widths and tolerances to the energy bin.
 
@@ -217,6 +218,17 @@ trajectories = mask_dispersions(Iqω, parents, qs, ωs; valid)
 ```
 
 The resolution tuple gives Gaussian FWHM along (q) and energy. Set `bridge` to the maximum expected energy displacement between neighbouring momentum rows in the support. Refinement returns one mask per input parent, and recovery retains that order. The trajectory result flags estimates without positive intensity weight and rows filled by interpolation.
+
+The segmentation can also run on the unrebinned grid. Give the instrumental resolution (a number or a function of energy), the steepest expected slope, and `physical_units=true`, which counts smoothing radii, the prominence noise estimate and the ridge tube in resolution elements rather than pixels.
+
+```julia
+seg = adaptive_autosplitbands2d(Iqω, qs, ωs; resolution_q=0.025, resolution_ω=ω -> 0.22 + 0.01ω,
+                                max_slope=45.0, physical_units=true)
+resolution_report(seg)   # Γq, Γω, the apparent Γω, their sources, and where a function was evaluated
+seg.qfirst.track_lengths # rows occupied by each peak track; short tracks do not add parent bands
+```
+
+`max_slope` (energy per unit of `qs`) links peaks of neighbouring rows one to one, closest first, within `max_slope·Δq`. Parent bands are counted from peaks on tracks that occupy at least `min_track_fraction` (default 0.25) of the rows, so short secondary features do not add parents. It also joins support components and ridge-graph nodes across that displacement. Without a supplied width, `resolution_estimate=:flat` estimates it from the columns where the strongest feature moves least, which on a steep dispersion is closer to the instrumental width than the default median half-height width. `ridge_long_beta0` counts the ridge-graph components that occupy at least `min_track_fraction` of the rows with peaks.
 
 ## Optional conventions
 
@@ -247,7 +259,15 @@ alternative is requested.
   (`neutron_xs`, `formula_xs`, `elastic_fwhm`, `incoherent_scale`, `radial_elastic_profile`,
   `fit_powder_lines`, `powder_line_ratio`, `powder_line_flat`, `container_corrected_scale`,
   `first_moment_scale`, `total_moment_scale`, `compare_scales`, `select_scale`).
-- No existing function changed behaviour.
+- New: `adaptive_autosplitbands2d(...; max_slope, min_track_fraction, physical_units, resolution_estimate)`,
+  a callable `resolution_ω`, `resolution_report`, and the result fields `apparent_resolution_ω`,
+  `resolution_source`, `resolution_energy` and `ridge_long_beta0`. All are off by default.
+- Changed default: `include_energy_edges = true` in `ridge_peak_slices`, `build_ridge_topology`,
+  `analyze_domain_topologies` and `RidgeRecoveryParams()`, matching `adaptive_autosplitbands2d` and
+  `qfirst_parent_domains`. `adaptive_autosplitbands2d` now passes its setting to its ridge topology, and
+  the ridge graph drops isolated maxima in the first or last energy bin. To reproduce earlier results,
+  pass `include_energy_edges=false` to those functions and `ridge_include_energy_edges=false` to
+  `adaptive_autosplitbands2d`.
 
 ## Changes in 0.1.2
 

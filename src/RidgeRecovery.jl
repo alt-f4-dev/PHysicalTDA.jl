@@ -34,7 +34,7 @@ Fields:
 | `min_prominence` | 0.005 | absolute prominence of a candidate peak |
 | `relative_score_floor` | 0.0035 | candidate score floor relative to the strongest peak |
 | `max_peaks_per_slice` | 16 | candidates kept per momentum slice |
-| `include_energy_edges` | false | also accept a maximum in the first or last energy bin as a candidate |
+| `include_energy_edges` | true | also accept a maximum in the first or last energy bin as a candidate |
 | `support_fraction` | 0.95 | a support extends while the normalized intensity is ≥ this fraction of the peak |
 | `support_min_level` | 0.001 | absolute floor of that threshold |
 | `support_max_half_width` | 0.22 | largest support half-width (energy) |
@@ -57,7 +57,7 @@ Base.@kwdef struct RidgeRecoveryParams
     min_prominence::Float64 = 0.005
     relative_score_floor::Float64 = 0.0035
     max_peaks_per_slice::Int = 16
-    include_energy_edges::Bool = false
+    include_energy_edges::Bool = true
     support_fraction::Float32 = 0.95f0
     support_min_level::Float32 = 0.001f0
     support_max_half_width::Float32 = 0.22f0

@@ -51,7 +51,7 @@ export autosplitbands, naivesplitbands   # historical aliases
 
 include("BandSegmentation.jl") #Physical Bands
 export ComponentResult, RidgeNode, RidgeCycleCandidate, RidgeTopologyResult
-export adaptive_autosplitbands2d, build_ridge_topology, ridge_dispersions
+export adaptive_autosplitbands2d, build_ridge_topology, ridge_dispersions, resolution_report
 export components_to_band_marginals, splitbands
 
 include("BandTopology.jl")

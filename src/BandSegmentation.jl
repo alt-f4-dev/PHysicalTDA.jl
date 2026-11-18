@@ -165,6 +165,26 @@ function estimate_energy_resolution(Iqω::AbstractMatrix{<:Real}, ωs;
     return max(median(widths), 2 * mean(diff(ωs)))
 end
 
+"""
+    estimate_flat_energy_resolution(Iqω, ωs; frac=0.5, flat_fraction=1/3)
+
+Half-height energy width of the strongest feature, taken as the median over the columns where that feature moves
+least between neighbouring momenta (the `flat_fraction` with the smallest shift). A dispersion's slope across a
+momentum bin broadens the apparent width; flat columns (band extrema, flat bands) are closest to the instrumental
+width.
+"""
+function estimate_flat_energy_resolution(Iqω::AbstractMatrix{<:Real}, ωs; frac::Float64=0.5, flat_fraction::Real=1/3)
+    nq, nω = size(Iqω)
+    0 < flat_fraction <= 1 || throw(ArgumentError("flat_fraction must lie in (0, 1]"))
+    nq < 3 && return estimate_energy_resolution(Iqω, ωs; frac)
+    imax = [argmax(@view Iqω[iq, :]) for iq in 1:nq]
+    shift = [iq == 1 ? abs(imax[2] - imax[1]) : iq == nq ? abs(imax[nq] - imax[nq-1]) :
+             max(abs(imax[iq+1] - imax[iq]), abs(imax[iq] - imax[iq-1])) for iq in 1:nq]
+    order = sortperm(shift)
+    flat = sort(order[1:max(1, ceil(Int, flat_fraction * nq))])
+    return estimate_energy_resolution(@view(Iqω[flat, :]), ωs; nslices=length(flat), frac)
+end
+
 function adaptive_resolution_radii(qs, ωs, Iqω=nothing;
                                     resolution_q=nothing,
                                     resolution_ω=nothing)
@@ -187,14 +207,16 @@ function adaptive_resolution_radii(qs, ωs, Iqω=nothing;
 end
 
 function adaptive_prominence(s::AbstractVector{Float64}; min_floor::Float64=0.025,
-                             kσ::Float64=3.5)
+                             kσ::Float64=3.5, lag::Int=1)
     # Resolution-invariant default: estimate pointwise noise from first
     # differences of the already resolution-smoothed, normalized slice.
+    # A lag of about the smoothing width keeps differences of a smoothed slice nearly independent.
     n = length(s)
-    n < 3 && return min_floor
-    diffs = Vector{Float64}(undef, n-1)
-    @inbounds for i in 1:n-1
-        diffs[i] = s[i+1] - s[i]
+    lag = clamp(lag, 1, max(1, n ÷ 3))
+    n < lag + 2 && return min_floor
+    diffs = Vector{Float64}(undef, n-lag)
+    @inbounds for i in 1:n-lag
+        diffs[i] = s[i+lag] - s[i]
     end
     σ = robust_sigma(diffs) / sqrt(2)
     return max(min_floor, kσ*σ)
@@ -206,12 +228,13 @@ function peak_candidates!(peaks::Vector{Int}, scores::Vector{Float64},
                           include_energy_edges::Bool=true,
                           min_prominence::Union{Nothing,Real}=nothing,
                           min_separation_bins::Int=2,
-                          prefix::Union{Nothing,Vector{Float64}}=nothing)
+                          prefix::Union{Nothing,Vector{Float64}}=nothing,
+                          prominence_lag::Int=1)
     empty!(peaks); empty!(scores)
     moving_average_1d!(work, spec, smooth_radius, prefix)
     normalize01!(work)
     n = length(work)
-    prom_cut = isnothing(min_prominence) ? adaptive_prominence(work) : Float64(min_prominence)
+    prom_cut = isnothing(min_prominence) ? adaptive_prominence(work; lag=prominence_lag) : Float64(min_prominence)
 
     # Energy is not periodic, but edge peaks are valid measured-window extrema.
     if include_energy_edges && n >= 2 && work[1] >= work[2]
@@ -437,8 +460,14 @@ function qfirst_parent_domains(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                                min_prominence::Union{Nothing,Real}=nothing,
                                parent_count_method::Symbol=:quantile,
                                max_bands::Union{Nothing,Int}=nothing,
+                               max_slope::Union{Nothing,Real}=nothing,
+                               min_track_fraction::Real=0.25,
+                               prominence_lag::Int=1,
                                verbose::Bool=true)
     nq, nω = size(Iqω)
+    max_slope === nothing || (isfinite(max_slope) && max_slope >= 0) ||
+        throw(ArgumentError("max_slope must be finite and nonnegative"))
+    0 <= min_track_fraction <= 1 || throw(ArgumentError("min_track_fraction must lie in [0, 1]"))
     peaks_local = [Int[] for _ in 1:nq]
     scores_local = [Float64[] for _ in 1:nq]
     prom_cuts = zeros(Float64, nq)
@@ -453,15 +482,29 @@ function qfirst_parent_domains(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                              include_energy_edges=include_energy_edges,
                              min_prominence=min_prominence,
                              min_separation_bins=max(2, smooth_radius_ω),
-                             prefix=prefix)
+                             prefix=prefix,
+                             prominence_lag=prominence_lag)
             peaks_local[iq] = copy(p)
             scores_local[iq] = copy(sc)
-            prom_cuts[iq] = adaptive_prominence(work)
+            prom_cuts[iq] = adaptive_prominence(work; lag=prominence_lag)
         end
     end
 
     peak_counts = length.(peaks_local)
-    Nparents = infer_parent_count(peak_counts; method=parent_count_method, max_bands=max_bands)
+    all_peaks, all_scores = peaks_local, scores_local
+    track_lengths = Int[]
+    if max_slope !== nothing
+        # Tracks join peaks of neighbouring rows within the slope tolerance; peaks on short tracks are not
+        # counted as parents or used as centres.
+        tolerance = ceil(Int, max_slope * mean(diff(qs)) / mean(diff(ωs)) - 1e-9) + smooth_radius_ω
+        keep, track_lengths = long_track_peaks(peaks_local, tolerance, min_track_fraction; periodic_q=periodic_q)
+        if any(!isempty, keep)
+            scores_local = [scores_local[iq][findall(in(keep[iq]), peaks_local[iq])] for iq in 1:nq]
+            peaks_local = keep
+        end
+    end
+    tracked_counts = length.(peaks_local)
+    Nparents = infer_parent_count(tracked_counts; method=parent_count_method, max_bands=max_bands)
 
     centers = zeros(Int, Nparents, nq)
     imputed = falses(Nparents, nq)
@@ -532,8 +575,44 @@ function qfirst_parent_domains(Iqω::AbstractMatrix{<:Real}, qs, ωs;
     end
 
     return (domains=domains, centers=centers, imputed=imputed,
-            peaks=peaks_local, scores=scores_local, nparents=Nparents,
-            peak_counts=peak_counts)
+            peaks=all_peaks, scores=all_scores, nparents=Nparents,
+            peak_counts=peak_counts, tracked_peaks=peaks_local, tracked_counts=tracked_counts,
+            track_lengths=track_lengths)
+end
+
+# Link peaks of neighbouring rows one to one, closest first, when their energies differ by at most `tolerance`
+# bins. Keep the peaks of tracks that occupy at least `fraction` of the rows holding any peak; return them and
+# all track lengths.
+function long_track_peaks(peaks::Vector{Vector{Int}}, tolerance::Int, fraction::Real; periodic_q::Bool=false)
+    nq = length(peaks)
+    offsets = cumsum([0; length.(peaks)])
+    parent = collect(1:offsets[end])
+    find!(x) = (while parent[x] != x; parent[x] = parent[parent[x]]; x = parent[x]; end; x)
+    for iq in 1:nq
+        jq = iq == nq ? (periodic_q ? 1 : 0) : iq + 1
+        (jq == 0 || jq == iq) && continue
+        # One-to-one links, closest pairs first, so a short feature crossing a band stays separate.
+        pairs = [(abs(pa - pb), a, b) for (a, pa) in enumerate(peaks[iq]) for (b, pb) in enumerate(peaks[jq])
+                 if abs(pa - pb) <= tolerance]
+        sort!(pairs)
+        used_a, used_b = falses(length(peaks[iq])), falses(length(peaks[jq]))
+        for (_, a, b) in pairs
+            used_a[a] || used_b[b] || begin
+                used_a[a] = used_b[b] = true
+                ra, rb = find!(offsets[iq] + a), find!(offsets[jq] + b)
+                ra == rb || (parent[ra] = rb)
+            end
+        end
+    end
+    rows = Dict{Int,Set{Int}}()
+    for iq in 1:nq, a in eachindex(peaks[iq])
+        push!(get!(rows, find!(offsets[iq] + a), Set{Int}()), iq)
+    end
+    occupied = count(!isempty, peaks)
+    lengths = sort!([length(v) for v in values(rows)]; rev=true)
+    minimum_rows = fraction * occupied
+    keep = [[p for (a, p) in enumerate(peaks[iq]) if length(rows[find!(offsets[iq] + a)]) >= minimum_rows] for iq in 1:nq]
+    return keep, lengths
 end
 
 #--------------#
@@ -739,10 +818,11 @@ end
 #--------------------------#
 function ridge_peak_slices(Iqω::AbstractMatrix{<:Real}, ωs;
                            smooth_radius_ω::Int=2,
-                           include_energy_edges::Bool=false,
+                           include_energy_edges::Bool=true,
                            min_prominence::Union{Nothing,Real}=nothing,
                            max_peaks_per_slice::Int=2,
-                           relative_score_floor::Float64=0.1)
+                           relative_score_floor::Float64=0.1,
+                           prominence_lag::Int=1)
     nq, nω = size(Iqω)
     peaks_local = [Int[] for _ in 1:nq]
     scores_local = [Float64[] for _ in 1:nq]
@@ -758,7 +838,8 @@ function ridge_peak_slices(Iqω::AbstractMatrix{<:Real}, ωs;
                              include_energy_edges=include_energy_edges,
                              min_prominence=min_prominence,
                              min_separation_bins=max(2, smooth_radius_ω),
-                             prefix=prefix)
+                             prefix=prefix,
+                             prominence_lag=prominence_lag)
             if !isempty(p)
                 smax = maximum(sc)
                 keep = findall(x -> x >= relative_score_floor * smax, sc)
@@ -1094,10 +1175,11 @@ and return its topology as a [`RidgeTopologyResult`](@ref).
 """
 function build_ridge_topology(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                               smooth_radius_ω::Int=2,
-                              include_energy_edges::Bool=false,
+                              include_energy_edges::Bool=true,
                               min_prominence::Union{Nothing,Real}=nothing,
                               max_peaks_per_slice::Int=2,
                               max_jump_bins::Union{Nothing,Int}=nothing,
+                              prominence_lag::Int=1,
                               tube_radius_ω::Int=1,
                               periodic_q::Bool=false,
                               pixel_adjacency::Symbol=:full,
@@ -1112,7 +1194,8 @@ function build_ridge_topology(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                                                   include_energy_edges=include_energy_edges,
                                                   min_prominence=min_prominence,
                                                   max_peaks_per_slice=max_peaks_per_slice,
-                                                  relative_score_floor=relative_score_floor)
+                                                  relative_score_floor=relative_score_floor,
+                                                  prominence_lag=prominence_lag)
 
     nodes = RidgeNode[]
     node_ids = [Int[] for _ in 1:nq]
@@ -1175,6 +1258,20 @@ function build_ridge_topology(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                                                                             min_branch_separation_bins=min_sep,
                                                                             max_branch_separation_frac=max_branch_separation_frac)
 
+    # An extremum clipped by the energy window continues a ridge; an isolated maximum in the first or
+    # last energy bin does not, and is dropped.
+    degree = zeros(Int, length(nodes))
+    for (a, b) in edges
+        degree[a] += 1
+        degree[b] += 1
+    end
+    isolated_edge = [degree[k] == 0 && (nodes[k].iω == 1 || nodes[k].iω == nω) for k in eachindex(nodes)]
+    if any(isolated_edge)
+        new_id = cumsum(.!isolated_edge)
+        nodes = nodes[.!isolated_edge]
+        edges = [(new_id[a], new_id[b]) for (a, b) in edges]
+    end
+
     beta0, beta1_raw = graph_betti_numbers(length(nodes), edges)
     comp_labels, ngraph_components = graph_component_labels(length(nodes), edges)
     candidates = ridge_cycle_candidates(nodes, edges, length.(peaks_local), ngraph_components, comp_labels;
@@ -1205,6 +1302,8 @@ function build_ridge_topology(Iqω::AbstractMatrix{<:Real}, qs, ωs;
         :min_cycle_confidence => min_cycle_confidence,
         :splitmerge_pattern_edges_added => pattern_edges_added,
         :splitmerge_pattern => splitmerge_pattern,
+        :isolated_edge_nodes_dropped => count(isolated_edge),
+        :component_rows => _component_rows(nodes, comp_labels, ngraph_components),
     )
     return RidgeTopologyResult(nodes, edges, beta0, beta1,
                                length.(peaks_local), ridge_mask,
@@ -1652,17 +1751,27 @@ const FULL_PIXEL_NEIGHBORS = ((-1,-1), (-1,0), (-1,1),
     throw(ArgumentError("pixel_adjacency must be :edge or :full"))
 end
 
+# Neighbouring momentum rows also connect within `max_jump_ω` energy bins, so a dispersion that moves
+# several bins per row stays one component.
+function slope_neighbors(pixel_adjacency::Symbol, max_jump_ω::Int)
+    base = pixel_neighbors(pixel_adjacency)
+    max_jump_ω <= 1 && return base
+    extra = [(dq, dw) for dq in (-1, 1) for dw in -max_jump_ω:max_jump_ω]
+    return unique!(vcat(collect(base), extra))
+end
+
 #--------------------#
 # Component Labeling #
 #--------------------#
 function label_support_components(mask::BitMatrix;
                                   pixel_adjacency::Symbol=:full,
-                                  periodic_q::Bool=false)
+                                  periodic_q::Bool=false,
+                                  max_jump_ω::Int=0)
     nq, nω = size(mask)
     labels = zeros(Int32, nq, nω)
     ncomp = 0
 
-    neighbors = pixel_neighbors(pixel_adjacency)
+    neighbors = slope_neighbors(pixel_adjacency, max_jump_ω)
 
     qqueue = Vector{Int}(undef, nq*nω)
     wqueue = Vector{Int}(undef, nq*nω)
@@ -1708,7 +1817,8 @@ function label_components_and_summarize!(components::Vector{ComponentResult},
                                          parent::Int;
                                          pixel_adjacency::Symbol=:full,
                                          periodic_q::Bool=false,
-                                         min_resolution_pixels::Int=12)
+                                         min_resolution_pixels::Int=12,
+                                         max_jump_ω::Int=0)
     nq, nω = size(mask)
     visited = falses(nq, nω)
     ncomp = 0
@@ -1717,7 +1827,7 @@ function label_components_and_summarize!(components::Vector{ComponentResult},
     Δω = mean(diff(ωs))
     lin = LinearIndices(mask)
 
-    neighbors = pixel_neighbors(pixel_adjacency)
+    neighbors = slope_neighbors(pixel_adjacency, max_jump_ω)
 
     qqueue = Vector{Int}(undef, nq*nω)
     wqueue = Vector{Int}(undef, nq*nω)
@@ -1824,6 +1934,29 @@ full 3×3 neighborhood excluding the center pixel.
 
 `ridge_beta1` in the result counts accepted split–merge events, not the
 graph cycle rank; see [`RidgeTopologyResult`](@ref).
+
+Resolution and grid options (all off by default):
+
+- `resolution_ω` may be a number (meV) or a function of energy; a function is evaluated at the median
+  energy of the column maxima. Without it, the width is estimated from the data with
+  `resolution_estimate = :apparent` (median half-height width) or `:flat` (only the columns where the
+  strongest feature moves least, closer to the instrumental width on a steep dispersion).
+  [`resolution_report`](@ref) returns the widths used, their sources, and the apparent width.
+- `max_slope` (energy per unit of `qs`) joins neighbouring momentum rows within `max_slope·Δq` in
+  component labelling and the ridge graph, and counts parent bands from peaks on tracks that occupy at
+  least `min_track_fraction` of the rows; short secondary features no longer add parents.
+- `physical_units = true` counts the smoothing radii, the prominence noise estimate and the ridge tube
+  in resolution elements instead of pixels, so the segmentation of an unrebinned grid matches that of a
+  resolution-matched one.
+
+`include_energy_edges` also applies to the ridge topology unless `ridge_include_energy_edges` is given; isolated maxima in the first or last energy bin are
+dropped from the ridge graph. `ridge_long_beta0` counts the ridge-graph components that occupy at least
+`min_track_fraction` of the rows with peaks.
+
+!!! warning "Changed default"
+    The internal ridge topology previously ignored maxima in the first and last energy bins. It now
+    follows `include_energy_edges` (default `true`); pass `ridge_include_energy_edges=false` to reproduce
+    earlier results.
 """
 function adaptive_autosplitbands2d(Iqω_in::AbstractMatrix{<:Real}, qs, ωs;
                                    periodic_q::Bool=false,
@@ -1849,16 +1982,39 @@ function adaptive_autosplitbands2d(Iqω_in::AbstractMatrix{<:Real}, qs, ωs;
                                    ridge_min_cycle_q_fraction::Float64=0.08,
                                    ridge_min_two_peak_fraction::Float64=0.15,
                                    ridge_min_cycle_confidence::Float64=0.55,
+                                   ridge_include_energy_edges::Bool=include_energy_edges,
+                                   max_slope::Union{Nothing,Real}=nothing,
+                                   min_track_fraction::Real=0.25,
+                                   physical_units::Bool=false,
+                                   resolution_estimate::Symbol=:apparent,
                                    verbose::Bool=true)
     Iqω = Matrix{Float64}(Iqω_in)
     nq, nω = size(Iqω)
-    radius_q, radius_ω_est, Γq, Γω = adaptive_resolution_radii(qs, ωs, Iqω; resolution_q=resolution_q, resolution_ω=resolution_ω)
+    resolution_estimate in (:apparent, :flat) || throw(ArgumentError("resolution_estimate must be :apparent or :flat"))
+    max_slope === nothing || (isfinite(max_slope) && max_slope >= 0) ||
+        throw(ArgumentError("max_slope must be finite and nonnegative"))
+    apparent_ω = resolution_estimate === :flat ? estimate_flat_energy_resolution(Iqω, ωs) :
+                 estimate_energy_resolution(Iqω, ωs)
+    Γω_in, ω_resolution, source_ω = _supplied_energy_resolution(resolution_ω, Iqω, ωs, apparent_ω)
+    radius_q, radius_ω_est, Γq, Γω = adaptive_resolution_radii(qs, ωs, Iqω; resolution_q=resolution_q, resolution_ω=Γω_in)
+    source_q = resolution_q === nothing ? :default : :supplied
+    jump_ω = max_slope === nothing ? 0 : ceil(Int, max_slope * mean(diff(qs)) / mean(diff(ωs)) - 1e-9)
+    # In resolution elements: one element per radius, as on a resolution-matched grid.
+    pixels_q, pixels_ω = Γq / mean(diff(qs)), Γω / mean(diff(ωs))
+    if physical_units
+        radius_q = max(1, round(Int, pixels_q))
+        radius_ω_est = max(1, round(Int, pixels_ω))
+    end
 
     # Half-height estimates can inflate in overlap regions.
     # Do not use them directly for masks or peak tracking.
-    support_radius_ω = isnothing(support_smooth_radius_ω) ? min(radius_ω_est, max_support_smooth_radius_ω) : max(1, Int(support_smooth_radius_ω))
+    # In physical units the radii follow the resolution alone, without the pixel caps.
+    support_cap = physical_units ? typemax(Int) : max_support_smooth_radius_ω
+    peak_cap = physical_units ? typemax(Int) : max_peak_smooth_radius_ω
+    support_radius_ω = isnothing(support_smooth_radius_ω) ? min(radius_ω_est, support_cap) : max(1, Int(support_smooth_radius_ω))
 
-    peak_radius_ω = isnothing(peak_smooth_radius_ω) ? min(support_radius_ω, max_peak_smooth_radius_ω) : max(1, Int(peak_smooth_radius_ω))
+    peak_radius_ω = isnothing(peak_smooth_radius_ω) ? min(support_radius_ω, peak_cap) : max(1, Int(peak_smooth_radius_ω))
+    prominence_lag = physical_units ? max(1, round(Int, pixels_ω)) : 1
 
     # Support image: moderately smoothed, used for binary masks/components.
     S = Matrix{Float64}(undef, nq, nω)
@@ -1879,6 +2035,9 @@ function adaptive_autosplitbands2d(Iqω_in::AbstractMatrix{<:Real}, qs, ωs;
                                    min_prominence=nothing,
                                    parent_count_method=parent_count_method,
                                    max_bands=max_bands,
+                                   max_slope=max_slope,
+                                   min_track_fraction=min_track_fraction,
+                                   prominence_lag=prominence_lag,
                                    verbose=verbose)
 
 
@@ -1918,21 +2077,27 @@ function adaptive_autosplitbands2d(Iqω_in::AbstractMatrix{<:Real}, qs, ωs;
         raw_counts[b], kept = label_components_and_summarize!(components, mask, Iqω, qs, ωs, b;
                                                               pixel_adjacency=pixel_adjacency,
                                                               periodic_q=periodic_q,
-                                                              min_resolution_pixels=minpix)
+                                                              min_resolution_pixels=minpix,
+                                                              max_jump_ω=jump_ω)
 
         verbose && @info "parent band $b: attempted=$(attempted[b]), active=$(active[b]), active fraction=$(round(active[b]/max(attempted[b],1); digits=4)), centerline_pixels=$(centerline_pixels[b]), centerline_rows=$(centerline_rows[b]), bridge_pixels=$(bridge_pixels[b]), bridge_rows=$(bridge_rows[b]), max_gap_q=$(bridge_max_gap[b]), raw components=$(raw_counts[b]), kept components=$kept"
     end
 
     component_counts = [count(c -> c.parent_band == b, components) for b in 1:qfirst.nparents]
-    r_smooth = isnothing(ridge_smooth_radius_ω) ? max(1, min(6, cld(radius_ω_est, 6))) : Int(ridge_smooth_radius_ω)
+    r_smooth = isnothing(ridge_smooth_radius_ω) ?
+        (physical_units ? peak_radius_ω : max(1, min(6, cld(radius_ω_est, 6)))) : Int(ridge_smooth_radius_ω)
     effective_ridge_max_peaks = max(ridge_max_peaks_per_slice, qfirst.nparents)
+    ridge_jump = ridge_max_jump_bins !== nothing ? ridge_max_jump_bins :
+                 max_slope === nothing ? nothing : max(4, jump_ω + r_smooth)
+    ridge_tube = physical_units ? max(ridge_tube_radius_ω, support_radius_ω) : ridge_tube_radius_ω
     ridge_topology_result = ridge_topology ? build_ridge_topology(Iqω, qs, ωs; 
                                                                   smooth_radius_ω=r_smooth, 
-                                                                  include_energy_edges=false,
+                                                                  include_energy_edges=ridge_include_energy_edges,
                                                                   min_prominence=nothing,
                                                                   max_peaks_per_slice=effective_ridge_max_peaks,
-                                                                  max_jump_bins=ridge_max_jump_bins,
-                                                                  tube_radius_ω=ridge_tube_radius_ω,
+                                                                  max_jump_bins=ridge_jump,
+                                                                  prominence_lag=prominence_lag,
+                                                                  tube_radius_ω=ridge_tube,
                                                                   periodic_q=ridge_periodic_q,
                                                                   pixel_adjacency=pixel_adjacency,
                                                                   relative_score_floor=ridge_relative_score_floor,
@@ -1961,6 +2126,7 @@ function adaptive_autosplitbands2d(Iqω_in::AbstractMatrix{<:Real}, qs, ωs;
             raw_component_counts=raw_counts, smooth=S,
             ridge_topology=ridge_topology_result,
             ridge_beta0=ridge_topology_result.beta0,
+            ridge_long_beta0=_long_components(ridge_topology_result, min_track_fraction),
             ridge_beta1=ridge_topology_result.beta1,
             ridge_peak_counts=ridge_topology_result.peak_counts,
             ridge_mask=ridge_topology_result.ridge_mask,
@@ -1977,7 +2143,52 @@ function adaptive_autosplitbands2d(Iqω_in::AbstractMatrix{<:Real}, qs, ωs;
             radius_q=radius_q, radius_ω=support_radius_ω,
             estimated_radius_ω=radius_ω_est,
             peak_radius_ω=peak_radius_ω,
-            resolution_q=Γq, resolution_ω=Γω)
+            resolution_q=Γq, resolution_ω=Γω,
+            apparent_resolution_ω=apparent_ω,
+            resolution_source=(q=source_q, ω=source_ω),
+            resolution_energy=ω_resolution,
+            max_slope=max_slope, physical_units=physical_units)
+end
+
+function _long_components(t::RidgeTopologyResult, fraction)
+    rows = get(t.diagnostics, :component_rows, Int[])
+    occupied = count(>(0), t.peak_counts)
+    return count(>=(fraction * occupied), rows)
+end
+
+# Number of distinct momentum rows occupied by each ridge-graph component, largest first.
+function _component_rows(nodes, labels, ncomponents)
+    rows = [Set{Int}() for _ in 1:ncomponents]
+    for (k, n) in enumerate(nodes)
+        push!(rows[labels[k]], n.iq)
+    end
+    return sort!(length.(rows); rev=true)
+end
+
+# A callable resolution is evaluated at the median energy of the column maxima.
+function _supplied_energy_resolution(resolution_ω, Iqω, ωs, apparent)
+    resolution_ω === nothing && return apparent, NaN, :estimated
+    resolution_ω isa Real && return Float64(resolution_ω), NaN, :supplied
+    energies = [ωs[argmax(@view Iqω[iq, :])] for iq in axes(Iqω, 1) if maximum(@view Iqω[iq, :]) > 0]
+    ω0 = isempty(energies) ? median(ωs) : median(energies)
+    Γ = Float64(resolution_ω(ω0))
+    isfinite(Γ) && Γ > 0 || throw(ArgumentError("resolution_ω($ω0) must be positive"))
+    return Γ, ω0, :function
+end
+
+"""
+    resolution_report(result)
+
+Resolution used by [`adaptive_autosplitbands2d`](@ref): `(Γq, Γω, Γω_apparent, source_q, source_ω, ω_evaluated,
+radius_q, radius_ω)`. `Γω_apparent` is the half-height width estimated from the data, which includes the slope of a
+dispersion across a bin and so exceeds the instrumental width on steep bands. `source_ω` is `:supplied`,
+`:function` (evaluated at `ω_evaluated`) or `:estimated`; `source_q` is `:supplied` or `:default`.
+"""
+function resolution_report(result)
+    hasproperty(result, :resolution_source) || throw(ArgumentError("result carries no resolution record"))
+    return (Γq=result.resolution_q, Γω=result.resolution_ω, Γω_apparent=result.apparent_resolution_ω,
+            source_q=result.resolution_source.q, source_ω=result.resolution_source.ω,
+            ω_evaluated=result.resolution_energy, radius_q=result.radius_q, radius_ω=result.radius_ω)
 end
 
 #-----------------#

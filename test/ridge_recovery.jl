@@ -51,10 +51,10 @@ using PHysicalTDA
         ωe = collect(0.45:0.4:8.0)
         truth = ωe[1] .+ 12 .* abs.(qs .- 0.5)
         I = [Lor(ω, ω0, 0.3) for ω0 in truth, ω in ωe]
-        @test RidgeRecoveryParams().include_energy_edges == false
-        t0 = recover_child_ridges(I, qs, ωe; params=RidgeRecoveryParams(ωe; max_slope=20))
+        @test RidgeRecoveryParams().include_energy_edges == true
+        t0 = recover_child_ridges(I, qs, ωe; params=RidgeRecoveryParams(ωe; max_slope=20, include_energy_edges=false))
         @test length(t0.parent_groups) == 2
-        t = recover_child_ridges(I, qs, ωe; params=RidgeRecoveryParams(ωe; max_slope=20, include_energy_edges=true))
+        t = recover_child_ridges(I, qs, ωe; params=RidgeRecoveryParams(ωe; max_slope=20))
         @test length(t.parent_groups) == 1 && t.global_children == [1]
         @test maximum(abs.(vec(t.tracks[1]) .- truth)) <= 2(ωe[2] - ωe[1])
         d = child_ridge_dispersions(t)
