@@ -85,6 +85,29 @@ function RidgeRecoveryParams(ωs::AbstractVector{<:Real}; max_slope::Real, kwarg
 end
 
 """
+    RidgeRecoveryParams(ωs, qs; max_slope, grid=:unrebinned, kwargs...)
+
+Preset for a fine grid. Use the largest adjacent momentum spacing to set the support link tolerance `max_slope * Δq`. Widths and prediction windows also account for that displacement. Keywords override the preset.
+"""
+function RidgeRecoveryParams(ωs::AbstractVector{<:Real}, qs::AbstractVector{<:Real}; max_slope::Real, grid=:unrebinned, kwargs...)
+    grid === :unrebinned || throw(ArgumentError("grid must be :unrebinned"))
+    _ridge_axis(qs, "qs")
+    _ridge_axis(ωs, "ωs")
+    isfinite(max_slope) && max_slope > 0 || throw(ArgumentError("max_slope must be positive and finite"))
+    Δω = mean(diff(ωs))
+    displacement = max_slope * maximum(diff(qs))
+    preset = (support_max_half_width=max(3Δω, displacement), support_touch=displacement,
+              prediction_scale=max(Δω, displacement / 2), fallback_window=max(2Δω, displacement),
+              min_prominence=0.1, relative_score_floor=0.1, include_energy_edges=true)
+    return RidgeRecoveryParams(ωs; max_slope, preset..., kwargs...)
+end
+
+function _ridge_axis(x, name)
+    length(x) >= 2 && all(isfinite, x) && all(i -> x[i] > x[i-1], 2:length(x)) ||
+        throw(ArgumentError("$name must have at least two finite, strictly increasing coordinates"))
+end
+
+"""
     RidgeSupportGroup
 
 Energy support `lo:hi` (bin indices) at momentum row `iq`, and the candidate node ids it contains.
@@ -171,7 +194,7 @@ function _ridge_smooth_normalize(I, r)
 end
 
 """
-    find_ridge_candidates(I, qs, ωs; params=RidgeRecoveryParams(), periodic_q=false) -> RidgeCandidates
+    find_ridge_candidates(I, qs, ωs; params=RidgeRecoveryParams(), periodic_q=false, valid=nothing) -> RidgeCandidates
 
 Local peak candidates of each momentum row of `I` (`nq × nω`), found with
 [`build_ridge_topology`](@ref), and their energy supports. By default only interior maxima count;
@@ -180,14 +203,19 @@ too, which is needed when a dispersion minimum (or maximum) lies at the edge of 
 window. A support extends from a peak while
 the normalized intensity stays above `max(support_min_level, support_fraction × peak)`, up to
 `support_max_half_width`; supports within `support_touch` of each other are joined into one
-[`RidgeSupportGroup`](@ref).
+[`RidgeSupportGroup`](@ref). Pass a Boolean `valid` mask to exclude unmeasured bins from smoothing, prominence, and supports.
 """
 function find_ridge_candidates(Iqω::AbstractMatrix{<:Real}, qs, ωs;
-                               params::RidgeRecoveryParams=RidgeRecoveryParams(), periodic_q::Bool=false)
+                               params::RidgeRecoveryParams=RidgeRecoveryParams(), periodic_q::Bool=false, valid=nothing)
     p = params
     size(Iqω) == (length(qs), length(ωs)) ||
         throw(DimensionMismatch("I is $(size(Iqω)); qs and ωs give $((length(qs), length(ωs)))."))
     I = Matrix{Float32}(Iqω); q = Float32.(qs); ω = Float32.(ωs)
+    if valid !== nothing
+        measured = _ridge_valid(I, valid)
+        candidates, _ = _masked_ridge_candidates(I, q, ω, p, measured, (measured,))
+        return candidates
+    end
     A = _ridge_smooth_normalize(I, p.peak_smooth_radius)
     seed = build_ridge_topology(I, q, ω; smooth_radius_ω=p.peak_smooth_radius,
                                 include_energy_edges=p.include_energy_edges, min_prominence=p.min_prominence, max_peaks_per_slice=p.max_peaks_per_slice,
@@ -232,22 +260,39 @@ function find_ridge_candidates(Iqω::AbstractMatrix{<:Real}, qs, ωs;
 end
 
 # Best support-guided continuation near a predicted energy, for a child with no candidate.
-function _ridge_support_candidate(c, parent_of_group, parent, iq, pred)
+function _ridge_support_candidate(c, parent_of_group, parent, iq, pred, domain=nothing)
     p = c.params
-    Δω = mean(diff(c.ω))
-    j0 = clamp(round(Int, 1 + (pred - c.ω[1]) / Δω), 1, length(c.ω))
-    r = max(1, round(Int, p.fallback_window / Δω))
+    if domain === nothing
+        Δω = mean(diff(c.ω))
+        j0 = clamp(round(Int, 1 + (pred - c.ω[1]) / Δω), 1, length(c.ω))
+        r = max(1, round(Int, p.fallback_window / Δω))
+        ilo, ihi = j0 - r, j0 + r
+    else
+        j0 = _nearest_ridge_bin(c.ω, pred)
+        ilo = searchsortedfirst(c.ω, pred - p.fallback_window)
+        ihi = searchsortedlast(c.ω, pred + p.fallback_window)
+    end
     best = -Inf32; bestj = j0
     @inbounds for gid in c.groups_by_q[iq]
         parent_of_group[gid] == parent || continue
         g = c.groups[gid]
-        lo = max(Int(g.lo), j0 - r); hi = min(Int(g.hi), j0 + r)
+        lo = max(Int(g.lo), ilo); hi = min(Int(g.hi), ihi)
         lo <= hi || continue
         for j in lo:hi
             z = (c.ω[j] - pred) / p.fallback_window
             value = c.A[iq, j] - p.fallback_shape_weight * z * z
             value > best && (best = value; bestj = j)
         end
+    end
+    if !isfinite(best) && domain !== nothing
+        for j in ilo:ihi
+            domain[iq, j] || continue
+            distance = abs(c.ω[j] - pred)
+            distance <= p.fallback_window || continue
+            score = c.A[iq, j] - p.fallback_shape_weight * (distance / p.fallback_window)^2
+            score > best && (best = score; bestj = j)
+        end
+        isfinite(best) || return (NaN32, 0f0)
     end
     return c.ω[bestj], max(best, 0f0)
 end
@@ -276,8 +321,73 @@ function _ridge_best_assignment(p, pred, prev, vel, E, S, dq, unique_candidates)
     return best
 end
 
+# For masked tracks, solve the rectangular assignment in polynomial time.
+function _ridge_masked_assignment(p, pred, prev, vel, E, S, dq)
+    m, n = length(pred), length(E)
+    costs = Matrix{Float64}(undef, m, n)
+    for k in 1:n, b in 1:m
+        slope = (E[k] - prev[b]) / dq
+        de = (E[k] - pred[b]) / p.prediction_scale
+        dv = (slope - vel[b]) / p.max_slope
+        overslope = max(0f0, abs(slope) / p.max_slope - 1f0)
+        costs[b, k] = de^2 + p.curvature_weight * dv^2 - p.score_weight * S[k] + 4f0 * overslope^2
+    end
+    return _ridge_minimum_assignment(costs)
+end
+
+function _ridge_minimum_assignment(costs)
+    m, n = size(costs)
+    all(isfinite, costs) || throw(ArgumentError("ridge assignment costs must be finite"))
+    n < m && return [argmin(@view costs[b, :]) for b in 1:m]
+    u, v = zeros(m), zeros(n+1)
+    matched, previous = zeros(Int, n+1), zeros(Int, n+1)
+    slack, used = zeros(n+1), falses(n+1)
+    # Column 1 is a sentinel representing the currently unmatched child.
+    for child in 1:m
+        matched[1] = child
+        fill!(slack, Inf)
+        fill!(used, false)
+        current = 1
+        while true
+            used[current] = true
+            b = matched[current]
+            δ, next = Inf, 0
+            for k in 2:n+1
+                used[k] && continue
+                reduced = costs[b, k-1] - u[b] - v[k]
+                if reduced < slack[k]
+                    slack[k], previous[k] = reduced, current
+                end
+                if slack[k] < δ
+                    δ, next = slack[k], k
+                end
+            end
+            for k in eachindex(used)
+                if used[k]
+                    u[matched[k]] += δ
+                    v[k] -= δ
+                else
+                    slack[k] -= δ
+                end
+            end
+            current = next
+            matched[current] == 0 && break
+        end
+        while current != 1
+            last = previous[current]
+            matched[current] = matched[last]
+            current = last
+        end
+    end
+    assignment = zeros(Int, m)
+    for k in 2:n+1
+        matched[k] != 0 && (assignment[matched[k]] = k-1)
+    end
+    return assignment
+end
+
 # Tracks m children of one parent across momentum.
-function _ridge_track_parent(c, parent_of_group, parent, groups, m)
+function _ridge_track_parent(c, parent_of_group, parent, groups, m, domain=nothing)
     p = c.params
     nq = length(c.q); ids_by_q = [Int32[] for _ in 1:nq]
     for gid in groups
@@ -291,8 +401,9 @@ function _ridge_track_parent(c, parent_of_group, parent, groups, m)
     @inbounds for b in 1:m
         T[b, qlo] = E[clamp(round(Int, 1 + (b - 1) * (length(E) - 1) / max(m - 1, 1)), 1, length(E))]
     end
+    lastq = qlo
     for iq in qlo+1:qhi
-        dq = max(c.q[iq] - c.q[iq-1], eps(Float32)); prev = @view T[:, iq-1]
+        dq = max(c.q[iq] - c.q[lastq], eps(Float32)); prev = @view T[:, lastq]
         pred = Float32[prev[b] + V[b] * dq for b in 1:m]
         ids = ids_by_q[iq]; nobs = length(ids)
         if nobs > m + p.extra_assignment_candidates
@@ -301,23 +412,27 @@ function _ridge_track_parent(c, parent_of_group, parent, groups, m)
         E = Float32[c.nodes[id].ω for id in ids]; S = Float32[c.nodes[id].score for id in ids]
         if nobs < m || isempty(E)
             for b in 1:m
-                e, s = _ridge_support_candidate(c, parent_of_group, parent, iq, pred[b])
+                e, s = _ridge_support_candidate(c, parent_of_group, parent, iq, pred[b], domain)
+                isfinite(e) || continue
                 push!(E, e); push!(S, 0.5f0 * s)
             end
         end
-        assign = _ridge_best_assignment(p, pred, prev, V, E, S, dq, length(E) >= m)
+        isempty(E) && continue
+        assign = domain === nothing ? _ridge_best_assignment(p, pred, prev, V, E, S, dq, length(E) >= m) :
+                 _ridge_masked_assignment(p, pred, prev, V, E, S, dq)
         memory = nobs < m ? p.unresolved_velocity_memory : p.resolved_velocity_memory
         @inbounds for b in 1:m
             e = E[assign[b]]; slope = (e - prev[b]) / dq
             T[b, iq] = e; V[b] = memory * V[b] + (1f0 - memory) * slope
         end
+        lastq = iq
     end
     return T
 end
 
 """
     recover_child_ridges(candidates::RidgeCandidates) -> ChildRidgeResult
-    recover_child_ridges(I, qs, ωs; params=RidgeRecoveryParams(), periodic_q=false) -> ChildRidgeResult
+    recover_child_ridges(I, qs, ωs; params=RidgeRecoveryParams(), periodic_q=false, parents=nothing, valid=nothing) -> ChildRidgeResult
 
 Child ridges inside connected parent supports.
 
@@ -332,14 +447,33 @@ Child ridges inside connected parent supports.
 4. The tracks form a ridge graph whose split, merge and crossing points are reported.
 
 Use [`child_ridge_dispersions`](@ref) for the tracks as variable-length segments. The second form
-runs [`find_ridge_candidates`](@ref) first.
+runs [`find_ridge_candidates`](@ref) first. Supply a segmentation result or a collection of disjoint Boolean parent masks to retain the physical parent order, including parents with zero candidates. A `valid` mask excludes unmeasured bins, and tracks may contain gaps where no eligible continuation exists.
 """
 function recover_child_ridges(Iqω::AbstractMatrix{<:Real}, qs, ωs;
-                              params::RidgeRecoveryParams=RidgeRecoveryParams(), periodic_q::Bool=false)
-    return recover_child_ridges(find_ridge_candidates(Iqω, qs, ωs; params=params, periodic_q=periodic_q))
+                              params::RidgeRecoveryParams=RidgeRecoveryParams(), periodic_q::Bool=false,
+                              parents=nothing, valid=nothing)
+    if parents === nothing && valid === nothing
+        return recover_child_ridges(find_ridge_candidates(Iqω, qs, ωs; params, periodic_q))
+    end
+    size(Iqω) == (length(qs), length(ωs)) || throw(DimensionMismatch("axes must match I"))
+    _ridge_axis(qs, "qs")
+    _ridge_axis(ωs, "ωs")
+    I, q, ω = Matrix{Float32}(Iqω), Float32.(qs), Float32.(ωs)
+    measured = _ridge_valid(I, valid)
+    if parents === nothing
+        c, _ = _masked_ridge_candidates(I, q, ω, params, measured, (measured,))
+        groups = _connected_ridge_parents(c)
+        return _child_ridge_result(c, groups, fill(measured, length(groups)))
+    end
+    domains = [_checked_ridge_mask(mask, size(I)) .& measured for mask in _ridge_parent_masks(parents, size(I))]
+    _check_disjoint_ridge_masks(domains, size(I))
+    c, groups = _masked_ridge_candidates(I, q, ω, params, measured, domains)
+    return _child_ridge_result(c, groups, domains)
 end
 
-function recover_child_ridges(c::RidgeCandidates)
+recover_child_ridges(c::RidgeCandidates) = _child_ridge_result(c, _connected_ridge_parents(c), nothing)
+
+function _connected_ridge_parents(c)
     p = c.params
     ng = length(c.groups); par = collect(1:ng); rank = zeros(Int, ng)
     touch = max(0, round(Int, p.support_touch / mean(diff(c.ω))))
@@ -367,13 +501,23 @@ function recover_child_ridges(c::RidgeCandidates)
         (maximum(iqs) - minimum(iqs) + 1) / length(c.q) >= p.min_parent_q_fraction && push!(parent_groups, gs)
     end
     sort!(parent_groups; by=gs -> minimum(c.groups[g].lo for g in gs))
-    np = length(parent_groups); group_parent = zeros(Int32, ng)
+    return parent_groups
+end
+
+function _child_ridge_result(c, parent_groups, domains)
+    p = c.params
+    np = length(parent_groups); group_parent = zeros(Int32, length(c.groups))
     for (ip, gs) in pairs(parent_groups), g in gs
         group_parent[g] = Int32(ip)
     end
     local_multiplicity = zeros(Int16, np, length(c.q)); support = falses(size(c.I))
     children = zeros(Int16, np); tracks = Vector{Matrix{Float32}}(undef, np)
     for (ip, gs) in pairs(parent_groups)
+        domain = domains === nothing ? nothing : domains[ip]
+        if isempty(gs)
+            tracks[ip] = Matrix{Float32}(undef, 0, length(c.q))
+            continue
+        end
         for gid in gs
             g = c.groups[gid]
             local_multiplicity[ip, g.iq] += Int16(1)
@@ -385,16 +529,20 @@ function recover_child_ridges(c::RidgeCandidates)
             count(x -> x >= k, @view local_multiplicity[ip, qactive]) / span >= p.min_child_q_fraction && (m = k)
         end
         children[ip] = Int16(m)
-        tracks[ip] = _ridge_track_parent(c, group_parent, Int32(ip), gs, m)
+        tracks[ip] = _ridge_track_parent(c, group_parent, Int32(ip), gs, m, domain)
     end
-    graph_nodes = RidgeNode[]; edges = Set{Tuple{Int,Int}}(); key = Dict{Tuple{Int,Int},Int}()
+    graph_nodes = RidgeNode[]; edges = Set{Tuple{Int,Int}}(); key = Dict{NTuple{3,Int},Int}()
     Δω = mean(diff(c.ω))
     for ip in 1:np, b in axes(tracks[ip], 1)
         lastid = 0
         for iq in axes(tracks[ip], 2)
-            e = tracks[ip][b, iq]; isfinite(e) || continue
-            j = clamp(round(Int, 1 + (e - c.ω[1]) / Δω), 1, length(c.ω))
-            id = get!(key, (iq, j)) do
+            e = tracks[ip][b, iq]
+            if !isfinite(e)
+                domains === nothing || (lastid = 0)
+                continue
+            end
+            j = domains === nothing ? clamp(round(Int, 1 + (e - c.ω[1]) / Δω), 1, length(c.ω)) : _nearest_ridge_bin(c.ω, e)
+            id = get!(key, (domains === nothing ? 0 : ip, iq, j)) do
                 push!(graph_nodes, RidgeNode(iq, j, Float64(c.q[iq]), Float64(e), 1.0))
                 length(graph_nodes)
             end
@@ -434,9 +582,17 @@ function child_ridge_dispersions(t::ChildRidgeResult)
     segs = NamedTuple[]
     for ip in eachindex(t.tracks), b in axes(t.tracks[ip], 1)
         inds = findall(isfinite, @view(t.tracks[ip][b, :]))
-        isempty(inds) && continue
-        push!(segs, (parent=ip, child=b, q=t.candidates.q[inds], ω=copy(@view(t.tracks[ip][b, inds])),
-                     local_multiplicity=copy(@view(t.local_multiplicity[ip, inds]))))
+        start = 1
+        while start <= length(inds)
+            stop = start
+            while stop < length(inds) && inds[stop+1] == inds[stop] + 1
+                stop += 1
+            end
+            rows = inds[start]:inds[stop]
+            push!(segs, (parent=ip, child=b, q=t.candidates.q[rows], ω=t.tracks[ip][b, rows],
+                         local_multiplicity=t.local_multiplicity[ip, rows]))
+            start = stop + 1
+        end
     end
     return (segments=segs, global_children=t.global_children, local_multiplicity=t.local_multiplicity,
             split_nodes=t.split_nodes, merge_nodes=t.merge_nodes, crossing_points=t.crossing_points)

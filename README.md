@@ -167,6 +167,18 @@ manuscript workflow exactly. The default ridge settings connect a ridge across m
 when it moves by about one energy bin or less between rows; for steep dispersions on coarse grids,
 `RidgeRecoveryParams(ωs; max_slope)` scales the support widths and tolerances to the energy bin.
 
+Refine a parent support on the original grid and recover its child ridges using the measured-bin mask.
+
+```julia
+parents = refine_supports(Iqω, σI, valid, qs, ωs, seg; rebin=rb,
+                          resolution=(rb.resolution_q, rb.resolution_ω), bridge=0.15)
+params = RidgeRecoveryParams(ωs, qs; max_slope=12)
+children = recover_child_ridges(Iqω, qs, ωs; params, parents, valid)
+trajectories = mask_dispersions(Iqω, parents, qs, ωs; valid)
+```
+
+The resolution tuple gives Gaussian FWHM along (q) and energy. Set `bridge` to the maximum expected energy displacement between neighbouring momentum rows in the support. Refinement returns one mask per input parent, and recovery retains that order. The trajectory result flags estimates without positive intensity weight and rows filled by interpolation.
+
 ## Optional conventions
 
 Each of these keywords defaults to the established behaviour, so existing results do not change unless an

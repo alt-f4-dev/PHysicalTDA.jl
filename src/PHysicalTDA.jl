@@ -65,6 +65,9 @@ include("Rebinning.jl") #Resolution-matched rebinning
 export RebinResult, rebin_to_resolution, upsample_mask
 
 include("RidgeRecovery.jl") #Child ridges inside parent supports
+include("RidgeMasks.jl")
+include("RidgeRefinement.jl")
+export refine_supports, mask_dispersions
 export RidgeRecoveryParams, RidgeSupportGroup, RidgeCandidates, ChildRidgeResult
 export find_ridge_candidates, recover_child_ridges, child_ridge_dispersions
 
