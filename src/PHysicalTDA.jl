@@ -67,7 +67,10 @@ export RebinResult, rebin_to_resolution, upsample_mask
 include("RidgeRecovery.jl") #Child ridges inside parent supports
 include("RidgeMasks.jl")
 include("RidgeRefinement.jl")
+include("RidgeJunctions.jl") #Branch identity through unresolved junctions
 export refine_supports, mask_dispersions
+export JunctionFit, BranchResolution, fit_junction, diabatic_energies, junction_model, resolve_branches,
+       branch_supports, branch_trajectories
 export RidgeRecoveryParams, RidgeSupportGroup, RidgeCandidates, ChildRidgeResult
 export find_ridge_candidates, recover_child_ridges, child_ridge_dispersions, prune_edge_tracks
 

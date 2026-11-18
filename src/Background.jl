@@ -284,7 +284,9 @@ Background `b(|Q|, ω) = ΣD/ΣN` in `|Q|` shells of width `dq` (Å⁻¹) from 0
 are filled in order:
 
 1. `interpolate = :omega_then_q` interpolates linearly along energy inside each shell, between measured cells
-   only (for example across an excluded dispersion); `:q` skips this step and `:none` skips both.
+   only (for example across an excluded dispersion); `:q` skips this step and `:none` skips both. A straight line
+   across an excluded energy range misses any structure of the background inside it (a peak is cut off), so use
+   `:q` when the background varies in energy faster than in `|Q|` there.
 2. Along `|Q|`, linearly between measured shells, and from the nearest measured shell at the ends.
 3. Energies with no measured shell take `fallback` (a [`background_profile`](@ref), a number, or `nothing`).
 

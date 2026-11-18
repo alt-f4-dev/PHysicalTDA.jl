@@ -23,7 +23,10 @@ include(joinpath(@__DIR__, "fixtures", "synthetic_afm.jl"))
     m_prof = exclusion_mask(hA; sites=bragg, dispersion=disp, window=1.0, qmax=2.5, indices=hkl)
     m_shell = m_prof .| exclusion_mask(hA; sites=[((0, 0), 0.2), ((0.5, 0.5), 0.2)], indices=hkl)
     b0 = background_profile(hA; exclude=m_prof, fill=true)
-    b = background_shells(hA; exclude=m_shell, dq=0.3, qmax=2.5, min_bins=20, smooth=0.5, smooth_from=1.0, fallback=b0)
+    # The background peaks at 6 meV, under the excluded top of the magnon band; bridging that gap along energy
+    # (:omega_then_q) would cut through the peak, so missing cells are taken from neighbouring shells instead.
+    b = background_shells(hA; exclude=m_shell, dq=0.3, qmax=2.5, min_bins=20, smooth=0.5, smooth_from=1.0, fallback=b0,
+                          interpolate=:q)
     ω = hA.centres[3]
     high = findall(x -> 7.0 <= x <= 8.5, ω)
     @test maximum(abs(b(1.0, ω[j])[1] / afm_background(ω[j]) - 1) for j in high) < 0.05
@@ -57,7 +60,7 @@ include(joinpath(@__DIR__, "fixtures", "synthetic_afm.jl"))
     hs = cut.s ./ sqrt(2)
     model = [afm_smag(x, x, e) for x in hs, e in ω]
     m1 = first_moment_scale(cut.values, cut.σ, ω, model; T=truth.T, window=(0.45, 7.5))
-    @test m1.κ ≈ κtrue rtol = 0.06
+    @test m1.κ ≈ κtrue rtol = 0.03
     @test count(m1.used) >= length(hs) ÷ 2
 
     zone = fold_to_zone(magnetic_histogram(hA, g; background=b, exclude=m_cut), C4; grid=(0:0.05:1, 0:0.05:1), indices=hkl)
