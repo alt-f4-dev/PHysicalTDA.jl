@@ -51,6 +51,8 @@ Fields:
 | `unresolved_velocity_memory` | 0.97 | slope memory when children overlap |
 | `fallback_window` | 0.05 | energy window searched when a child has no candidate |
 | `fallback_shape_weight` | 0.50 | penalty on departing from the prediction inside that window |
+| `min_significance` | Inf | with intensity errors `σ`, candidates this many errors above their surroundings bypass the score floor |
+| `touch_crossings` | false | report order exchanges carried through rows where two tracks touch or are missing |
 """
 Base.@kwdef struct RidgeRecoveryParams
     peak_smooth_radius::Int = 1
@@ -74,6 +76,8 @@ Base.@kwdef struct RidgeRecoveryParams
     unresolved_velocity_memory::Float32 = 0.97f0
     fallback_window::Float32 = 0.05f0
     fallback_shape_weight::Float32 = 0.50f0
+    min_significance::Float64 = Inf
+    touch_crossings::Bool = false
 end
 
 function RidgeRecoveryParams(ωs::AbstractVector{<:Real}; max_slope::Real, kwargs...)
@@ -206,14 +210,14 @@ the normalized intensity stays above `max(support_min_level, support_fraction ×
 [`RidgeSupportGroup`](@ref). Pass a Boolean `valid` mask to exclude unmeasured bins from smoothing, prominence, and supports.
 """
 function find_ridge_candidates(Iqω::AbstractMatrix{<:Real}, qs, ωs;
-                               params::RidgeRecoveryParams=RidgeRecoveryParams(), periodic_q::Bool=false, valid=nothing)
+                               params::RidgeRecoveryParams=RidgeRecoveryParams(), periodic_q::Bool=false, valid=nothing, σ=nothing)
     p = params
     size(Iqω) == (length(qs), length(ωs)) ||
         throw(DimensionMismatch("I is $(size(Iqω)); qs and ωs give $((length(qs), length(ωs)))."))
     I = Matrix{Float32}(Iqω); q = Float32.(qs); ω = Float32.(ωs)
     if valid !== nothing
         measured = _ridge_valid(I, valid)
-        candidates, _ = _masked_ridge_candidates(I, q, ω, p, measured, (measured,))
+        candidates, _ = _masked_ridge_candidates(I, q, ω, p, measured, (measured,); σ)
         return candidates
     end
     A = _ridge_smooth_normalize(I, p.peak_smooth_radius)
@@ -448,11 +452,24 @@ Child ridges inside connected parent supports.
 
 Use [`child_ridge_dispersions`](@ref) for the tracks as variable-length segments. The second form
 runs [`find_ridge_candidates`](@ref) first. Supply a segmentation result or a collection of disjoint Boolean parent masks to retain the physical parent order, including parents with zero candidates. A `valid` mask excludes unmeasured bins, and tracks may contain gaps where no eligible continuation exists.
+
+With the intensity errors `σ`, candidates whose prominence exceeds `params.min_significance` errors are kept
+even below the relative score floor. `merge_touching=true` joins parents whose supports touch, so that two
+branches crossing between energy-ordered parents are tracked in one parent. `edge_tracks=:drop` (or `:flag`)
+applies [`prune_edge_tracks`](@ref) with `span = edge_span` to tracks pinned to the energy-window edge.
 """
 function recover_child_ridges(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                               params::RidgeRecoveryParams=RidgeRecoveryParams(), periodic_q::Bool=false,
-                              parents=nothing, valid=nothing)
-    if parents === nothing && valid === nothing
+                              parents=nothing, valid=nothing, σ=nothing, merge_touching::Bool=false,
+                              edge_tracks::Symbol=:keep, edge_span=nothing)
+    edge_tracks in (:keep, :drop, :flag) || throw(ArgumentError("edge_tracks must be :keep, :drop or :flag"))
+    if edge_tracks !== :keep
+        r = recover_child_ridges(Iqω, qs, ωs; params, periodic_q, parents, valid, σ, merge_touching)
+        edge_span === nothing && throw(ArgumentError("give edge_span, about half the energy resolution (FWHM)"))
+        span = edge_span
+        return prune_edge_tracks(r; σ, span, action=edge_tracks).result
+    end
+    if parents === nothing && valid === nothing && σ === nothing
         return recover_child_ridges(find_ridge_candidates(Iqω, qs, ωs; params, periodic_q))
     end
     size(Iqω) == (length(qs), length(ωs)) || throw(DimensionMismatch("axes must match I"))
@@ -461,13 +478,14 @@ function recover_child_ridges(Iqω::AbstractMatrix{<:Real}, qs, ωs;
     I, q, ω = Matrix{Float32}(Iqω), Float32.(qs), Float32.(ωs)
     measured = _ridge_valid(I, valid)
     if parents === nothing
-        c, _ = _masked_ridge_candidates(I, q, ω, params, measured, (measured,))
+        c, _ = _masked_ridge_candidates(I, q, ω, params, measured, (measured,); σ)
         groups = _connected_ridge_parents(c)
         return _child_ridge_result(c, groups, fill(measured, length(groups)))
     end
     domains = [_checked_ridge_mask(mask, size(I)) .& measured for mask in _ridge_parent_masks(parents, size(I))]
     _check_disjoint_ridge_masks(domains, size(I))
-    c, groups = _masked_ridge_candidates(I, q, ω, params, measured, domains)
+    merge_touching && (domains = _merge_touching_masks(domains, max(1, round(Int, params.support_touch / mean(diff(ω))))))
+    c, groups = _masked_ridge_candidates(I, q, ω, params, measured, domains; σ)
     return _child_ridge_result(c, groups, domains)
 end
 
@@ -557,7 +575,9 @@ function _child_ridge_result(c, parent_groups, domains)
     splits = findall(i -> outdeg[i] > 1 && indeg[i] <= 1, eachindex(graph_nodes))
     merges = findall(i -> indeg[i] > 1 && outdeg[i] <= 1, eachindex(graph_nodes))
     crossings = NTuple{2,Float32}[]
+    p.touch_crossings && _touching_crossings!(crossings, tracks, c.q, Δω / 2)
     for ip in 1:np, a in 1:(size(tracks[ip], 1)-1), b in (a+1):size(tracks[ip], 1), iq in 1:(length(c.q)-1)
+        p.touch_crossings && break
         d1 = tracks[ip][a, iq] - tracks[ip][b, iq]; d2 = tracks[ip][a, iq+1] - tracks[ip][b, iq+1]
         if isfinite(d1) && isfinite(d2) && d1 * d2 < 0
             t = abs(d1) / (abs(d1) + abs(d2))
@@ -596,4 +616,124 @@ function child_ridge_dispersions(t::ChildRidgeResult)
     end
     return (segments=segs, global_children=t.global_children, local_multiplicity=t.local_multiplicity,
             split_nodes=t.split_nodes, merge_nodes=t.merge_nodes, crossing_points=t.crossing_points)
+end
+
+# Order exchanges between two tracks of a parent, carried through rows where they touch (|Δ| ≤ tol) or are
+# missing; the crossing is placed at the middle of the touching stretch.
+function _touching_crossings!(crossings, tracks, q, tol)
+    for T in tracks, a in 1:size(T, 1)-1, b in a+1:size(T, 1)
+        last_sign, last_iq = 0, 0
+        for iq in axes(T, 2)
+            d = T[a, iq] - T[b, iq]
+            isfinite(d) || continue
+            abs(d) <= tol && continue
+            s = d > 0 ? 1 : -1
+            if last_sign != 0 && s != last_sign
+                lo, hi = last_iq, iq
+                mid = (q[lo] + q[hi]) / 2
+                k = argmin(abs.(q .- mid))
+                e = (T[a, k] + T[b, k]) / 2
+                push!(crossings, (Float32(mid), Float32(isfinite(e) ? e : (T[a, lo] + T[b, lo] + T[a, hi] + T[b, hi]) / 4)))
+            end
+            last_sign, last_iq = s, iq
+        end
+    end
+    return crossings
+end
+
+# Merge parent masks whose bins are adjacent within one momentum row and `jump` energy bins.
+function _merge_touching_masks(masks, jump)
+    n = length(masks)
+    n <= 1 && return masks
+    owner = zeros(Int, size(first(masks)))
+    for (k, M) in enumerate(masks)
+        owner[M] .= k
+    end
+    parent = collect(1:n)
+    find!(x) = (while parent[x] != x; x = parent[x] = parent[parent[x]]; end; x)
+    nq, nω = size(owner)
+    for i in 1:nq, j in 1:nω
+        a = owner[i, j]
+        a == 0 && continue
+        for di in 0:1, dj in -jump:jump
+            (di == 0 && dj <= 0) && continue
+            i2, j2 = i + di, j + dj
+            1 <= i2 <= nq && 1 <= j2 <= nω || continue
+            b = owner[i2, j2]
+            b == 0 || b == a || (parent[find!(a)] = find!(b))
+        end
+    end
+    roots = unique(find!.(1:n))
+    return [reduce(.|, (masks[k] for k in 1:n if find!(k) == r)) for r in roots]
+end
+
+# Weighted quadratic a + b x + c x² over the bins within `span` of an energy edge, x = |ω − ω_edge|. Returns the
+# curvature and its error; without σ the error is scaled by the fit residual.
+function _edge_curvature(I, σ, ω, iq, side, span)
+    e = side === :low ? first(ω) : last(ω)
+    ks = [k for k in eachindex(ω) if abs(ω[k] - e) <= span && isfinite(I[iq, k]) && (σ === nothing || σ[iq, k] > 0)]
+    length(ks) < 4 && return (NaN, Inf)
+    x = abs.(Float64.(ω[ks]) .- e)
+    w = σ === nothing ? ones(length(ks)) : 1 ./ Float64.(σ[iq, ks])
+    X = [ones(length(ks)) x x .^ 2] .* w
+    y = Float64.(I[iq, ks]) .* w
+    θ = X \ y
+    C = inv(X' * X)
+    σ === nothing && (C .*= sum(abs2, y .- X * θ) / max(length(ks) - 3, 1))
+    return θ[3], sqrt(max(C[3, 3], 0.0))
+end
+
+"""
+    prune_edge_tracks(r::ChildRidgeResult; σ=nothing, span, nσ=3, action=:drop)
+        -> (; result, dropped, at_edge, truncated)
+
+Child tracks that never leave the first or last energy bin have no measured maximum when the intensity there is
+a tail or a flank of a feature outside the window. Such a track is tested column by column with a quadratic fit
+of the intensity over the `span` (meV) next to the edge: a Gaussian line is concave within one standard deviation
+of its centre and convex beyond it, so a convex edge (curvature > `nσ` errors) places the maximum outside the
+window, while a concave edge places it at the window. Tracks with more convex than concave columns are removed
+(`action=:drop`) or only reported (`action=:flag`); the others are kept and listed in `at_edge`. Tracks that leave
+the edge somewhere are kept, and their edge columns are listed in `truncated` (a mode running out of the window).
+`span` of about half the energy resolution (FWHM) is appropriate; `σ` is the intensity error of the map.
+"""
+function prune_edge_tracks(r::ChildRidgeResult; σ=nothing, span::Real, nσ::Real=3.0, action::Symbol=:drop)
+    action in (:drop, :flag) || throw(ArgumentError("action must be :drop or :flag"))
+    span > 0 || throw(ArgumentError("span must be positive"))
+    c = r.candidates
+    I, ω = c.I, c.ω
+    σ === nothing || size(σ) == size(I) || throw(DimensionMismatch("σ must match the intensity map"))
+    tol = 1.01 * abs(ω[2] - ω[1])
+    on_low(x) = isfinite(x) && abs(x - first(ω)) <= tol
+    on_high(x) = isfinite(x) && abs(x - last(ω)) <= tol
+    dropped = NamedTuple[]; at_edge = NamedTuple[]; truncated = NamedTuple[]
+    tracks = similar(r.tracks); children = copy(r.global_children)
+    for (ip, T) in enumerate(r.tracks)
+        rows = Int[]
+        for b in axes(T, 1)
+            cols = findall(isfinite, @view T[b, :])
+            npin = count(i -> on_low(T[b, i]) || on_high(T[b, i]), cols)
+            if isempty(cols) || npin < length(cols)
+                npin > 0 && push!(truncated, (; parent=ip, child=b, columns=npin))
+                push!(rows, b)
+                continue
+            end
+            curv = [_edge_curvature(I, σ, ω, i, on_low(T[b, i]) ? :low : :high, span) for i in cols]
+            concave = count(((k, e),) -> k < -nσ * e, curv)
+            convex = count(((k, e),) -> k > nσ * e, curv)
+            rec = (; parent=ip, child=b, columns=length(cols), concave, convex,
+                   q=(c.q[first(cols)], c.q[last(cols)]), ω=Float64(T[b, first(cols)]))
+            if concave > convex
+                push!(at_edge, rec); push!(rows, b)
+            else
+                push!(dropped, rec)
+                action === :flag && push!(rows, b)
+            end
+        end
+        tracks[ip] = T[rows, :]
+        children[ip] = length(rows)
+    end
+    result = ChildRidgeResult(c, r.group_parent, r.parent_groups, r.local_multiplicity, children, tracks,
+                              r.support_mask, r.graph_nodes, r.graph_edges, r.split_nodes, r.merge_nodes,
+                              r.crossing_points)
+    return (; result, dropped, at_edge, truncated)
 end

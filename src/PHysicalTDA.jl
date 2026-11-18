@@ -69,7 +69,7 @@ include("RidgeMasks.jl")
 include("RidgeRefinement.jl")
 export refine_supports, mask_dispersions
 export RidgeRecoveryParams, RidgeSupportGroup, RidgeCandidates, ChildRidgeResult
-export find_ridge_candidates, recover_child_ridges, child_ridge_dispersions
+export find_ridge_candidates, recover_child_ridges, child_ridge_dispersions, prune_edge_tracks
 
 include("QFI.jl") #Quantum Fisher information
 include("Reduction.jl")
@@ -82,7 +82,8 @@ export rebin, integrate, weighted_average, map_nearest_bins
 export find_bragg_peaks, fit_index_correction, corrected_indices
 export symmetry_images, fold_to_zone, cut_path, polarization_factor, magnetic_conversion
 export cut_histogram, reciprocal_point_group
-export TabulatedBackground, momentum_magnitude, exclusion_mask, background_profile, background_shells, magnetic_histogram
+export TabulatedBackground, momentum_magnitude, exclusion_mask, background_profile, background_shells, magnetic_histogram,
+       subtract_elastic
 export GAMMA_R0_SQ, neutron_xs, formula_xs, elastic_fwhm, incoherent_scale, container_corrected_scale
 export radial_elastic_profile, fit_powder_lines, powder_line_ratio, powder_line_flat
 export first_moment_scale, total_moment_scale, compare_scales, select_scale

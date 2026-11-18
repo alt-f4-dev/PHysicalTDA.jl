@@ -52,12 +52,15 @@ function momentum_magnitude(h::NormalizedHistogram; reciprocal_basis=nothing)
 end
 
 function _site(site)
-    position, width = site
+    length(site) in (2, 3) || throw(ArgumentError("a site is (position, halfwidth) or (position, halfwidth, (ωmin, ωmax))"))
+    position, width = site[1], site[2]
     p = _hkl_point(position)
     P = length(p)
     w = width isa Real ? ntuple(_ -> Float64(width), P) : Tuple(Float64.(width))
     length(w) == P && all(x -> isfinite(x) && x >= 0, w) || throw(ArgumentError("invalid exclusion half-width"))
-    return (p, SVector{P,Float64}(w))
+    energy = length(site) == 3 ? (Float64(site[3][1]), Float64(site[3][2])) : (-Inf, Inf)
+    energy[1] <= energy[2] || throw(ArgumentError("a site energy window must have ωmin ≤ ωmax"))
+    return (p, SVector{P,Float64}(w), energy)
 end
 
 function _near_site(q, p::SVector{P}, w::SVector{P}) where {P}
@@ -85,7 +88,9 @@ Mark histogram bins to leave out of a background or a scale estimate (`true` = e
 
 - `sites`: pairs `(position, halfwidth)` in HKL, repeated over all reciprocal-lattice translations. A bin is
   excluded when every component lies within `halfwidth` of the site; 2D positions test `(H, K)` only. Use them for
-  Bragg peaks, nuclear zone centres and magnetic zone centres.
+  Bragg peaks, nuclear zone centres and magnetic zone centres. A third element `(ωmin, ωmax)` limits the site to
+  that energy range, e.g. `((0.5, 0.5), 0.075, (-Inf, 0.5))` removes the elastic tail of a magnetic Bragg peak
+  while keeping the inelastic signal at the same wave vector.
 - `dispersion`: a function of the bin's `(H, K, L)` returning one mode energy or a collection of them; bins
   with `|ω - ω_mode| ≤ window` are excluded.
 - `qmin`, `qmax`, `qbands`: limits on `|Q|` (Å⁻¹) and bands `(centre, halfwidth)` around powder lines.
@@ -106,10 +111,15 @@ function exclusion_mask(h::NormalizedHistogram; sites=(), dispersion=nothing, wi
     needs_q = qmin > 0 || isfinite(qmax) || !isempty(bands)
     Q = needs_q ? momentum_magnitude(h; reciprocal_basis) : nothing
     momentum = falses(g.shape)
+    windows = [NTuple{2,Float64}[] for _ in 1:prod(g.shape)]
     modes = Vector{Vector{Float64}}(undef, prod(g.shape))
     for (k, i) in enumerate(CartesianIndices(g.shape))
         hkl = indices === nothing ? Tuple(_stored_hkl(g, i)) : Tuple(Float64.(indices[i]))
-        excluded = any(((p, w),) -> _near_site(hkl, p, w), parsed)
+        excluded = false
+        for (p, w, e) in parsed
+            _near_site(hkl, p, w) || continue
+            isinf(e[1]) && isinf(e[2]) && e[1] < 0 < e[2] ? (excluded = true) : push!(windows[k], e)
+        end
         if Q !== nothing
             q = Q[i]
             excluded |= q < qmin || q > qmax || any(((c, w),) -> abs(q - c) <= w, bands)
@@ -123,7 +133,8 @@ function exclusion_mask(h::NormalizedHistogram; sites=(), dispersion=nothing, wi
     for i in CartesianIndices(h.D)
         m = _momentum_index(g, i)
         e = ω[i[g.energy]]
-        mask[i] = momentum[m] || any(x -> abs(e - x) <= window, modes[ids[m]])
+        mask[i] = momentum[m] || any(((a, b),) -> a <= e <= b, windows[ids[m]]) ||
+                  any(x -> abs(e - x) <= window, modes[ids[m]])
     end
     return mask
 end
@@ -369,4 +380,96 @@ function _magnetic_arrays(D0, D20::V, N0, coords::F, g::G, background::B, mask) 
         D2 === nothing || (D2[i] = D20[i] + var)
     end
     return D, D2, N
+end
+
+_gauss_shape(x, fwhm) = exp(-4log(2) * (x / fwhm)^2)
+
+# Width and centre of a Gaussian elastic line from the row-summed profile: half-maximum estimate, then a grid.
+function _elastic_gaussian(ω, profile)
+    k = argmax(profile)
+    base = minimum(profile)
+    half = base + (profile[k] - base) / 2
+    lo, hi = k, k
+    while lo > 1 && profile[lo-1] >= half; lo -= 1; end
+    while hi < length(ω) && profile[hi+1] >= half; hi += 1; end
+    Δ = abs(ω[min(k + 1, end)] - ω[max(k - 1, 1)]) / 2
+    Γ0 = max(abs(ω[hi] - ω[lo]) + Δ, 2Δ)
+    best = (Inf, Γ0, Float64(ω[k]))
+    for Γ in range(0.5Γ0, 1.5Γ0; length=101), c in range(ω[k] - Γ0 / 2, ω[k] + Γ0 / 2; length=51)
+        use = [j for j in eachindex(ω) if abs(ω[j] - c) <= 1.5Γ]
+        length(use) >= 4 || continue
+        X = [_gauss_shape.(ω[use] .- c, Γ) ones(length(use))]
+        r = sum(abs2, profile[use] .- X * (X \ profile[use]))
+        r < best[1] && (best = (r, Γ, c))
+    end
+    return best[2], best[3]
+end
+
+"""
+    subtract_elastic(I, ω; σ=nothing, valid=nothing, lineshape=nothing, fwhm=nothing, centre=nothing,
+                     window=nothing, min_bins=4)
+        -> (; I, σ, model, amplitude, σ_amplitude, fwhm, centre)
+
+Remove the elastic line from every momentum row of `I` (rows: momentum, columns: energy `ω`). Each row is fitted
+over `|ω - centre| ≤ window` with `A f(ω - centre) + c`, and `A f` is subtracted at all energies, so its tail no
+longer reaches the inelastic window. This keeps the inelastic signal under the tail, which an energy-limited site
+exclusion in [`exclusion_mask`](@ref) would discard.
+
+`lineshape` is the instrument's elastic line `f(Δω)` (any normalization); give it whenever it is known, because
+a real line usually has heavier tails than a Gaussian and extrapolating a Gaussian under-subtracts exactly where
+the tail matters. Without it a Gaussian is used, with `fwhm` and `centre` fitted to the row-summed profile when
+not given. `window` defaults to the FWHM (required with a `lineshape`). With `σ`, rows are fitted with weights
+`1/σ²` and the amplitude error is added in quadrature to the returned `σ`. Unmeasured bins (`valid = false`) are
+neither fitted nor changed.
+"""
+function subtract_elastic(I::AbstractMatrix{<:Real}, ω::AbstractVector{<:Real}; σ=nothing, valid=nothing,
+                          lineshape=nothing, fwhm=nothing, centre=nothing, window=nothing, min_bins::Integer=4)
+    size(I, 2) == length(ω) || throw(DimensionMismatch("I must have one column per energy"))
+    σ === nothing || size(σ) == size(I) || throw(DimensionMismatch("σ must match I"))
+    measured = valid === nothing ? isfinite.(I) : BitMatrix(valid) .& isfinite.(I)
+    size(measured) == size(I) || throw(DimensionMismatch("valid must match I"))
+    ωf = Float64.(ω)
+    if lineshape === nothing
+        if fwhm === nothing || centre === nothing
+            profile = [sum(I[i, j] for i in axes(I, 1) if measured[i, j]; init=0.0) for j in eachindex(ωf)]
+            Γ, c = _elastic_gaussian(ωf, profile)
+            fwhm = fwhm === nothing ? Γ : fwhm
+            centre = centre === nothing ? c : centre
+        end
+        Γ = Float64(fwhm)
+        f = x -> _gauss_shape(x, Γ)
+        window = window === nothing ? Γ : window
+    else
+        window === nothing && throw(ArgumentError("give the fit window with a lineshape"))
+        f = lineshape
+        centre = centre === nothing ? 0.0 : centre
+    end
+    c0 = Float64(centre); W = Float64(window)
+    W > 0 || throw(ArgumentError("window must be positive"))
+    shape = [Float64(f(x - c0)) for x in ωf]
+    fitbins = findall(x -> abs(x - c0) <= W, ωf)
+    out = Matrix{Float64}(I); model = zeros(size(I))
+    σout = σ === nothing ? nothing : Matrix{Float64}(σ)
+    amplitude = zeros(size(I, 1)); σamp = fill(NaN, size(I, 1))
+    for i in axes(I, 1)
+        use = [j for j in fitbins if measured[i, j] && (σ === nothing || σ[i, j] > 0)]
+        length(use) >= min_bins || continue
+        w = σ === nothing ? ones(length(use)) : 1 ./ Float64.(σ[i, use])
+        X = [shape[use] ones(length(use))] .* w
+        y = Float64.(I[i, use]) .* w
+        θ = X \ y
+        C = inv(X' * X)
+        if σ === nothing
+            C .*= sum(abs2, y .- X * θ) / max(length(use) - 2, 1)
+        end
+        amplitude[i] = θ[1]; σamp[i] = sqrt(max(C[1, 1], 0.0))
+        for j in eachindex(ωf)
+            measured[i, j] || continue
+            model[i, j] = θ[1] * shape[j]
+            out[i, j] -= model[i, j]
+            σout === nothing || (σout[i, j] = hypot(σout[i, j], σamp[i] * shape[j]))
+        end
+    end
+    return (; I=out, σ=σout, model, amplitude, σ_amplitude=σamp, fwhm=lineshape === nothing ? Float64(fwhm) : NaN,
+            centre=c0)
 end

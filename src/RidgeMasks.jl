@@ -37,7 +37,7 @@ function _check_masked_tracking_params(p)
 end
 
 # Scan measured runs separately so that an invalid bin never supplies a peak's neighbours or baseline.
-function _masked_ridge_candidates(I, q, ω, p, valid, domains)
+function _masked_ridge_candidates(I, q, ω, p, valid, domains; σ=nothing)
     _ridge_axis(q, "qs")
     _ridge_axis(ω, "ωs")
     p.peak_smooth_radius >= 0 && isfinite(p.fallback_window) && p.fallback_window > 0 ||
@@ -50,7 +50,7 @@ function _masked_ridge_candidates(I, q, ω, p, valid, domains)
     groups_by_q = [Int32[] for _ in q]
     parent_groups = [Int32[] for _ in domains]
     prefix, work = zeros(nω + 1), zeros(nω)
-    scores = Tuple{Int,Float64}[]
+    scores = Tuple{Int,Float64,Bool}[]
     kept = Int[]
     for (parent, domain) in pairs(domains), iq in 1:nq
         empty!(scores)
@@ -64,15 +64,16 @@ function _masked_ridge_candidates(I, q, ω, p, valid, domains)
             while j < nω && domain[iq, j+1]
                 j += 1
             end
-            _masked_peak_run!(scores, work, prefix, A, I, valid, iq, lo, j, p)
+            _masked_peak_run!(scores, work, prefix, A, I, valid, iq, lo, j, p, σ)
             j += 1
         end
         isempty(scores) && continue
         sort!(scores; by=x -> (-x[2], x[1]))
         floor = p.relative_score_floor * first(scores)[2]
         empty!(kept)
-        for (bin, score) in scores
-            score >= floor && length(kept) < p.max_peaks_per_slice || break
+        for (bin, score, significant) in scores
+            length(kept) < p.max_peaks_per_slice || break
+            score >= floor || significant || continue
             any(k -> abs(k - bin) < max(2, p.peak_smooth_radius) &&
                      all(@view domain[iq, min(k, bin):max(k, bin)]), kept) && continue
             push!(kept, bin)
@@ -105,7 +106,7 @@ function _masked_ridge_candidates(I, q, ω, p, valid, domains)
     return RidgeCandidates(I, A, q, ω, nodes, byq, groups, groups_by_q, p), parent_groups
 end
 
-function _masked_peak_run!(scores, work, prefix, A, I, valid, iq, lo, hi, p)
+function _masked_peak_run!(scores, work, prefix, A, I, valid, iq, lo, hi, p, σ=nothing)
     radius = p.peak_smooth_radius
     prefix[lo] = 0.0
     for j in lo:hi
@@ -136,6 +137,12 @@ function _masked_peak_run!(scores, work, prefix, A, I, valid, iq, lo, hi, p)
         j == lo && (lmin = isfinite(left) ? left : baseline)
         j == hi && (rmin = isfinite(right) ? right : baseline)
         prominence = (x - max(lmin, rmin)) / (top - baseline)
-        prominence > 0 && prominence >= p.min_prominence && push!(scores, (j, score))
+        significant = false
+        if σ !== nothing && isfinite(p.min_significance)
+            a2, b2 = max(lo, j-radius), min(hi, j+radius)
+            σs = sqrt(sum(abs2, @view σ[iq, a2:b2])) / (b2 - a2 + 1)
+            significant = σs > 0 && (x - max(lmin, rmin)) / σs >= p.min_significance
+        end
+        prominence > 0 && (prominence >= p.min_prominence || significant) && push!(scores, (j, score, significant))
     end
 end
