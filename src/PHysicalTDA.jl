@@ -76,9 +76,15 @@ include("Reduction.jl")
 include("IndexCorrection.jl")
 include("MagneticReduction.jl")
 include("ReciprocalCuts.jl")
+include("Background.jl")
+include("Normalization.jl")
 export rebin, integrate, weighted_average, map_nearest_bins
 export find_bragg_peaks, fit_index_correction, corrected_indices
 export symmetry_images, fold_to_zone, cut_path, polarization_factor, magnetic_conversion
+export TabulatedBackground, momentum_magnitude, exclusion_mask, background_profile, background_shells, magnetic_histogram
+export GAMMA_R0_SQ, neutron_xs, formula_xs, elastic_fwhm, incoherent_scale, container_corrected_scale
+export radial_elastic_profile, fit_powder_lines, powder_line_ratio, powder_line_flat
+export first_moment_scale, total_moment_scale, compare_scales, select_scale
 export KB_MEV_PER_K, qfi_kernel, energy_bin_widths, qfi_density
 export QFIResult, qfi, qfi_bound, nqfi, nqfi_lower_bound, qfi_witness
 export BandQFIResult, band_supports, band_qfi, band_dependence

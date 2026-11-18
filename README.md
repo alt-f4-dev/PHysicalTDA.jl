@@ -63,6 +63,8 @@ dm  = domain_marginals(Iqω, seg, qs, ωs)
 | Robust statistics | `MAD` |
 | HDF5 and NeXus inspection | `saveHDF5`, `loadHDF5`, `h5tree` |
 | Mantid MDHistograms and MDNorm | `load_mdhisto`, `load_mdnorm`, `eachslice_mdnorm`, `intensity`, `uncertainty`, `measured` |
+| Background | `exclusion_mask`, `momentum_magnitude`, `background_profile`, `background_shells`, `TabulatedBackground`, `magnetic_histogram` |
+| Absolute normalization | `neutron_xs`, `formula_xs`, `elastic_fwhm`, `incoherent_scale`, `radial_elastic_profile`, `fit_powder_lines`, `powder_line_ratio`, `powder_line_flat`, `container_corrected_scale`, `first_moment_scale`, `total_moment_scale`, `compare_scales`, `select_scale` |
 
 The cubical complex and the filtrations built on intensity data are described on the
 [Conventions](https://alt-f4-dev.github.io/PHysicalTDA.jl/dev/conventions/) page; each function's
@@ -113,6 +115,43 @@ cut = cut_path(h, [(0.0, 0.0), (0.5, 0.5)]; width=0.04, step=0.02, indices=hkl, 
 `cut_path` and `fold_to_zone` accept reciprocal-space point-operation matrices. Symmetry images sharing a destination count once per source bin. A folded cut includes every lattice translation of an image that reaches the path, so paths may end on zone boundaries such as `(1/2, 1/2)`. When the path length is not a multiple of `step`, `remainder=:keep`, `:merge`, or `:drop` controls the short final bin. The folded histogram records shared-source covariance, and later reductions account for it. A 2D cut sums over any omitted momentum coordinate. A diagonal selection `abs(H-K) ≤ w` corresponds to `width=w/sqrt(2)`.
 
 With conversion and background, the cut evaluates `sum(D - N*b)/sum(N*g)`. A background can be a scalar, a histogram-shaped array, or a callable of measured `(|Q|, ω)`. Background uncertainties returned by a callable are treated as independent between source bins in `σ`; `σ_background` gives the bound for a background error fully correlated within each cut bin.
+
+## Background
+
+Build an exclusion mask from Bragg positions, zone centres, a model dispersion and `|Q|` limits, then estimate the background from the remaining bins. `background_profile` gives a momentum-independent `b(ω)`; `background_shells` gives `b(|Q|, ω)` in `|Q|` shells, filling cells with too few bins along energy, then along `|Q|`, then from a fallback profile. Both return a `TabulatedBackground`, which `cut_path`, `to_smag` and `magnetic_histogram` accept as a background.
+
+```julia
+bragg = [((0, 0), 0.10), ((0.5, 0.5), 0.10)]
+ω_model(q) = 4J * S * sqrt(max(1 - ((cospi(2q[1]) + cospi(2q[2])) / 2)^2, 0))
+profile_mask = exclusion_mask(h; sites=bragg, dispersion=ω_model, window=1.0, qmax=2.5, indices=hkl)
+shell_mask = profile_mask .| exclusion_mask(h; sites=[((0, 0), 0.20), ((0.5, 0.5), 0.20)], indices=hkl)
+b0 = background_profile(h; exclude=profile_mask, fill=true)
+b = background_shells(h; exclude=shell_mask, dq=0.15, qmax=2.5, min_bins=40, smooth=0.5, smooth_from=1.0, fallback=b0)
+cut = cut_path(h, [(0.0, 0.0), (0.5, 0.5)]; width=0.025/sqrt(2), step=0.0125*sqrt(2), indices=hkl, conv=g, background=b)
+```
+
+`magnetic_histogram(h, g; background)` returns a `NormalizedHistogram` with numerator `D - N*b` and normalization `N*g`, so `fold_to_zone`, `rebin` and `integrate` reduce `S_mag` directly. Masks are `true` where a bin is excluded; combine them with `.|`.
+
+## Absolute normalization
+
+Cross sections come from Sears (1992). The incoherent elastic line of the sample sets one scale; powder lines of a container measure its share of the same line; sum rules set two more. `compare_scales` and `select_scale` tabulate the estimates and choose the most conservative.
+
+```julia
+inc = incoherent_scale(h; exclude=profile_mask, formula="Rb2MnF4", magnetic_ions=1)
+radial = radial_elastic_profile(path_D, path_N; dim=4, energy_window=inc.window, dq=0.02, qmax=5.0)
+τs = [2π * norm(hkl) / 4.032 for hkl in ((1, 1, 1), (2, 0, 0))]
+fit = fit_powder_lines(radial.Q, radial.R, τs)
+al = powder_line_flat(fit, [powder_line_ratio(:Al, hkl; a=4.032) for hkl in ((1, 1, 1), (2, 0, 0))])
+κ_al = container_corrected_scale(inc.κ, al.flat / inc.integral, al.σflat / inc.integral)
+m1 = first_moment_scale(cut.values, cut.σ, cut.ω, S_model; T=5.0, window=(0.45, 7.5), correction=r₁, correction_σ=0.01)
+zone = fold_to_zone(magnetic_histogram(h, g; background=b), group; grid=(0:0.025:1, 0:0.025:1), indices=hkl)
+m0 = total_moment_scale(intensity(zone), S_model_zone, cut.ω; window=(0.45, 7.5), correction=0.985, correction_σ=0.015)
+table = compare_scales([(name="incoherent", κ=inc.κ), (; name="Al-corrected", κ_al...),
+                        (name="first moment", κ=m1.κ, κ_lo=m1.κ_lo), (name="total moment", κ=m0.κ, κ_lo=m0.κ_lo)])
+κ = select_scale(table; among=("first moment", "total moment")).used
+```
+
+`κ` converts `(D/N)/g` into `S_mag` per magnetic ion. The incoherent scale is `σ_inc/(4π I_el (γr₀)² n_mag)`, with `I_el` the elastic line above the lower of its two flank levels. A powder line's `|Q|`-integrated area, divided by `powder_line_ratio`, is that material's flat elastic level. The sum rules compare measured and model moments; `correction` carries the ratio of the true to the model moment. The low end `κ_lo` includes `correction_σ` and, for the first moment, the spread over momentum. Absorption, multiple scattering and Debye–Waller corrections are not applied.
 
 ## Quantum Fisher information
 
@@ -203,6 +242,11 @@ alternative is requested.
 - `RidgeRecoveryParams(; include_energy_edges=true)` lets `find_ridge_candidates` and
   `recover_child_ridges` accept maxima in the first or last energy bin, for dispersion extrema at
   the edge of a clipped energy window. The default, `false`, is unchanged.
+- New: background estimation (`exclusion_mask`, `momentum_magnitude`, `background_profile`,
+  `background_shells`, `TabulatedBackground`, `magnetic_histogram`) and absolute normalization
+  (`neutron_xs`, `formula_xs`, `elastic_fwhm`, `incoherent_scale`, `radial_elastic_profile`,
+  `fit_powder_lines`, `powder_line_ratio`, `powder_line_flat`, `container_corrected_scale`,
+  `first_moment_scale`, `total_moment_scale`, `compare_scales`, `select_scale`).
 - No existing function changed behaviour.
 
 ## Changes in 0.1.2
