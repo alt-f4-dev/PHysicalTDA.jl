@@ -110,9 +110,9 @@ cut = cut_path(h, [(0.0, 0.0), (0.5, 0.5)]; width=0.04, step=0.02, indices=hkl, 
 
 `rebin`, `integrate`, and the histogram overload of `rebin_to_resolution` combine numerator, variance, and exposure before forming intensity. Use explicit factors for multidimensional grids. `weighted_average` and `magnetic_conversion(h; average_over=l_dim)` retain singleton dimensions for subsequent mapping with `map_nearest_bins`.
 
-`cut_path` and `fold_to_zone` accept reciprocal-space point-operation matrices. Symmetry images sharing a destination count once per source bin. The folded histogram records shared-source covariance, and later reductions account for it. A 2D cut sums over any omitted momentum coordinate. A diagonal selection `abs(H-K) ≤ w` corresponds to `width=w/sqrt(2)`.
+`cut_path` and `fold_to_zone` accept reciprocal-space point-operation matrices. Symmetry images sharing a destination count once per source bin. A folded cut includes every lattice translation of an image that reaches the path, so paths may end on zone boundaries such as `(1/2, 1/2)`. When the path length is not a multiple of `step`, `remainder=:keep`, `:merge`, or `:drop` controls the short final bin. The folded histogram records shared-source covariance, and later reductions account for it. A 2D cut sums over any omitted momentum coordinate. A diagonal selection `abs(H-K) ≤ w` corresponds to `width=w/sqrt(2)`.
 
-With conversion and background, the cut evaluates `sum(D - N*b)/sum(N*g)`. A background can be a scalar, a histogram-shaped array, or a callable of measured `(|Q|, ω)`. Background uncertainties returned by a callable are treated as independent between source bins.
+With conversion and background, the cut evaluates `sum(D - N*b)/sum(N*g)`. A background can be a scalar, a histogram-shaped array, or a callable of measured `(|Q|, ω)`. Background uncertainties returned by a callable are treated as independent between source bins in `σ`; `σ_background` gives the bound for a background error fully correlated within each cut bin.
 
 ## Quantum Fisher information
 

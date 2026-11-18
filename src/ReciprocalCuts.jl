@@ -48,7 +48,23 @@ function _point_at(indices::AbstractArray,g,i,dim::Val{P}) where {P}
     return _index_components(indices[i],dim)
 end
 
-function _momentum_targets(target::F,g,indices,ops,origin::SVector{P},translations) where {F,P}
+# Visit `y + n` for every lattice translation `n` that keeps the image inside the closed box `reach`.
+function _foreach_translation(f::F,y::SVector{P},reach) where {F,P}
+    lo,hi = reach
+    ranges = ntuple(d -> ceil(Int,lo[d]-y[d]):floor(Int,hi[d]-y[d]),Val(P))
+    for n in CartesianIndices(ranges)
+        f(y+SVector{P,Float64}(Tuple(n)))
+    end
+    return nothing
+end
+
+function _push_target!(distinct,target::F,q) where {F}
+    k = target(q)
+    k>0 && !(k in distinct) && push!(distinct,k)
+    return nothing
+end
+
+function _momentum_targets(target::F,g,indices,ops,origin::SVector{P},translations,reach=nothing) where {F,P}
     if indices !== nothing
         axes(indices)==map(Base.OneTo,g.shape) || throw(DimensionMismatch("indices must match the momentum grid"))
         all(q -> P<=length(q)<=3 && all(isfinite,q),indices) || throw(ArgumentError("invalid corrected HKL coordinates"))
@@ -64,8 +80,12 @@ function _momentum_targets(target::F,g,indices,ops,origin::SVector{P},translatio
         else
             empty!(distinct)
             for op in ops
-                k = target(_zone_point(op*q,origin,translations))
-                k>0 && !(k in distinct) && push!(distinct,k)
+                y = _zone_point(op*q,origin,translations)
+                if translations && reach !== nothing
+                    _foreach_translation(p -> _push_target!(distinct,target,p),y,reach)
+                else
+                    _push_target!(distinct,target,y)
+                end
             end
             append!(destinations,distinct)
         end
@@ -85,7 +105,7 @@ function _scatter_reciprocal(h,g,targets,shape,conv,background,norms,mask)
 end
 
 function _scatter_reciprocal(D,D2::V,N,energies,g,targets,shape,conv::C,background::B,norms,mask,source_cov) where {V,C,B}
-    numerator,weight = zeros(shape),zeros(shape)
+    numerator,weight,systematic = zeros(shape),zeros(shape),zeros(shape)
     variance = D2 === nothing ? nothing : zeros(shape)
     cov = Dict{Tuple{Int,Int},Float64}()
     active = isempty(source_cov) ? nothing : falses(size(D))
@@ -99,13 +119,14 @@ function _scatter_reciprocal(D,D2::V,N,energies,g,targets,shape,conv::C,backgrou
         q = norms === nothing ? 0.0 : norms[_momentum_index(g,i)]
         bin = _conversion_bin(D,N,conv,background,i,q,energies[i[g.energy]])
         bin === nothing && continue
-        d,w,var = bin
+        d,w,var,σb = bin
         active === nothing || (active[i] = true)
         D2 === nothing || (var += D2[i])
         for j in entries
             k = dest[j]+offset
             numerator[k] += d
             weight[k] += w
+            systematic[k] += σb
             if variance !== nothing
                 variance[k] += var
                 for l in first(entries):j-1
@@ -125,7 +146,7 @@ function _scatter_reciprocal(D,D2::V,N,energies,g,targets,shape,conv::C,backgrou
             end
         end
     end
-    return numerator,variance,weight,_covariance_entries(cov)
+    return numerator,variance,weight,_covariance_entries(cov),systematic
 end
 
 function _zone_bin(q,edges,linear,translations)
@@ -164,7 +185,7 @@ function _fold_to_zone(h,group,edges::NTuple{P},indices,translations) where {P}
     target = q -> _zone_bin(q,edges,linear,translations)
     targets = _momentum_targets(target,g,indices,ops,SVector{P,Float64}(map(first,edges)),translations)
     e = g.energy
-    D,D2,N,cov = _scatter_reciprocal(h,g,targets,(shape...,size(h.D,e)),nothing,nothing,nothing,nothing)
+    D,D2,N,cov,_ = _scatter_reciprocal(h,g,targets,(shape...,size(h.D,e)),nothing,nothing,nothing,nothing)
     centres = map(edge -> [(edge[i]+edge[i+1])/2 for i in 1:length(edge)-1],edges)
     names = [collect(("H","K","L")[1:P]);h.names[e]]
     units,frames = [fill("r.l.u.",P);h.units[e]],[fill("HKL",P);h.frames[e]]
@@ -172,7 +193,8 @@ function _fold_to_zone(h,group,edges::NTuple{P},indices,translations) where {P}
                               names,units,frames)
 end
 
-function _path_geometry(path,width,step)
+function _path_geometry(path,width,step,remainder::Symbol=:keep)
+    remainder in (:keep,:merge,:drop) || throw(ArgumentError("remainder must be :keep, :merge, or :drop"))
     vertices = map(_hkl_point,collect(path))
     length(vertices)>=2 || throw(ArgumentError("path needs at least two vertices"))
     p = length(first(vertices))
@@ -186,13 +208,22 @@ function _path_geometry(path,width,step)
     edges = collect(0.0:step:last(cumulative))
     if length(edges)>1 && isapprox(last(edges),last(cumulative);atol=0,rtol=8eps(Float64))
         edges[end] = last(cumulative)
-    else
+    elseif remainder === :merge && length(edges)>1
+        edges[end] = last(cumulative)
+    elseif remainder === :keep || length(edges)==1
         push!(edges,last(cumulative))
     end
-    return (;points,directions=segments ./ lengths,lengths,cumulative,edges,width2=Float64(width)^2)
+    # Arc lengths beyond the last edge (the dropped remainder and the end cap) are excluded below.
+    send = remainder === :drop ? last(edges) : Inf
+    pad = Float64(width)+16eps(max(1.0,maximum(q -> maximum(abs,q),points)))
+    lo = SVector{p,Float64}(ntuple(d -> minimum(q -> q[d],points)-pad,p))
+    hi = SVector{p,Float64}(ntuple(d -> maximum(q -> q[d],points)+pad,p))
+    return (;points,directions=segments ./ lengths,lengths,cumulative,edges,width2=Float64(width)^2,send,reach=(lo,hi))
 end
 
 function _path_bin(q,path)
+    lo,hi = path.reach
+    all(d -> lo[d]<=q[d]<=hi[d],eachindex(q)) || return 0
     distance = Inf
     s = 0.0
     for k in eachindex(path.lengths)
@@ -204,18 +235,27 @@ function _path_bin(q,path)
         end
     end
     distance <= path.width2+(16eps(max(1.0,maximum(abs,q))))^2 || return 0
+    s <= path.send*(1+8eps(Float64)) || return 0
     return min(searchsortedlast(path.edges,s),length(path.edges)-1)
 end
 
 """
     cut_path(h, path; width, step, fold=nothing, background=nothing, conv=nothing, exclude=nothing, indices=nothing,
-             translations=true, origin=nothing, reciprocal_basis=nothing)
+             translations=true, origin=nothing, reciprocal_basis=nothing, remainder=:keep)
 
 Cut along a 2D or 3D HKL polyline using a Euclidean half-width and arc-length step in reciprocal lattice coordinates. Use a Boolean source mask or a predicate of corrected image HKL for exclusions. Apply background and conversion on the measured grid. Return the ratio `Σ(D-N*b)/Σ(N*g)`, its standard error, coverage, effective denominator, numerator variance, and normalized off-diagonal covariance.
+
+With `fold` and `translations`, every lattice translation of each symmetry image that reaches the path contributes, so paths may end on zone boundaries or lie outside the cell at `origin`. A source still counts once per destination bin.
+
+When the path length is not a multiple of `step`, `remainder` keeps the short final bin (`:keep`), merges it into the preceding bin (`:merge`), or drops it together with the end cap (`:drop`).
+
+`σ` treats background uncertainties as independent between source bins. `σ_background` is `Σ N σ_b / Σ N g`, the bound for a background error fully correlated within each cut bin; it is zero without background uncertainties.
 """
 function cut_path(h::NormalizedHistogram,path;width::Real,step::Real,fold=nothing,background=nothing,conv=nothing,
-                  exclude=nothing,indices=nothing,translations::Bool=true,origin=nothing,reciprocal_basis=nothing)
-    return _cut_path(h,_path_geometry(path,width,step),fold,background,conv,exclude,indices,translations,origin,reciprocal_basis)
+                  exclude=nothing,indices=nothing,translations::Bool=true,origin=nothing,reciprocal_basis=nothing,
+                  remainder::Symbol=:keep)
+    return _cut_path(h,_path_geometry(path,width,step,remainder),fold,background,conv,exclude,indices,translations,origin,
+                     reciprocal_basis)
 end
 
 function _cut_path(h,path,fold,background,conv,exclude,indices,translations,origin,basis)
@@ -230,13 +270,14 @@ function _cut_path(h,path,fold,background,conv,exclude,indices,translations,orig
     dim = Val(length(first(path.points)))
     ops = fold === nothing ? nothing : _point_operations(fold,dim)
     target = q -> predicate !== nothing && predicate(q) ? 0 : _path_bin(q,path)
-    targets = _momentum_targets(target,g,indices,ops,_zone_origin(origin,dim),translations)
+    targets = _momentum_targets(target,g,indices,ops,_zone_origin(origin,dim),translations,path.reach)
     shape = (length(path.edges)-1,size(h.D,g.energy))
-    numerator,variance,weight,cov = _scatter_reciprocal(h,g,targets,shape,conv,background,norms,mask)
+    numerator,variance,weight,cov,systematic = _scatter_reciprocal(h,g,targets,shape,conv,background,norms,mask)
     valid = weight .> 0
     values = map((d,n) -> n>0 ? d/n : NaN,numerator,weight)
     σ = variance === nothing ? nothing : map((v,n) -> n>0 ? sqrt(v)/n : NaN,variance,weight)
+    σ_background = map((b,n) -> n>0 ? b/n : NaN,systematic,weight)
     covariance = _CovarianceEntry[(i,j,v/(weight[i]*weight[j])) for (i,j,v) in cov if valid[i] && valid[j]]
     s = [(path.edges[i]+path.edges[i+1])/2 for i in 1:shape[1]]
-    return (;values,σ,weight,s,ω=h.centres[g.energy],numerator,variance,valid,covariance)
+    return (;values,σ,weight,s,ω=h.centres[g.energy],numerator,variance,valid,covariance,σ_background)
 end

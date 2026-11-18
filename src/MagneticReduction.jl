@@ -83,7 +83,8 @@ function _background_norms(h,g,b,basis)
     return map(i -> norm(B*_stored_hkl(g,i)),CartesianIndices(g.shape))
 end
 
-function _conversion_bin(D,N,conv,background,i,q,ω)
+# Type parameters force specialization on callable conversions and backgrounds, which are only passed through here.
+function _conversion_bin(D,N,conv::C,background::B,i,q,ω) where {C,B}
     n = N[i]
     n>0 && isfinite(n) && isfinite(D[i]) || return nothing
     g = _bin_value(conv,i)
@@ -92,7 +93,7 @@ function _conversion_bin(D,N,conv,background,i,q,ω)
     b,σ = _background_parts(_background_value(background,i,q,ω))
     isfinite(b) && isfinite(σ) || return nothing
     σ>=0 || throw(ArgumentError("background uncertainty must be nonnegative"))
-    return D[i]-n*b,n*g,abs2(n*σ)
+    return D[i]-n*b,n*g,abs2(n*σ),n*σ
 end
 
 """
@@ -110,14 +111,14 @@ function to_smag(h::NormalizedHistogram,g;background=nothing,reciprocal_basis=no
     return _to_smag(h.D,h.D2,h.N,coords,g,background)
 end
 
-function _to_smag(D,D2::V,N,coords::F,g,background) where {V,F}
+function _to_smag(D,D2::V,N,coords::F,g::G,background::B) where {V,F,G,B}
     S = fill(NaN,size(D))
     σ = D2 === nothing ? nothing : fill(NaN,size(D))
     for i in CartesianIndices(D)
         q,ω = coords(i)
         bin = _conversion_bin(D,N,g,background,i,q,ω)
         bin === nothing && continue
-        numerator,weight,var = bin
+        numerator,weight,var,_ = bin
         weight>0 || continue
         S[i] = numerator/weight
         σ === nothing || (σ[i] = sqrt(D2[i]+var)/weight)

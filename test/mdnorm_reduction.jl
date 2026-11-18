@@ -183,6 +183,8 @@ end
     @test only(cut.values) ≈ 6
     @test only(cut.weight) ≈ 2.75
     @test only(cut.σ) ≈ sqrt(8+0.25+2.25)/2.75
+    @test only(cut.σ_background) ≈ 0.5*4/2.75
+    @test cut_path(h,path;width=0,step=1,conv=g).σ_background == zeros(1,1)
     @test isnan(to_smag(h,0.0)[1][1])
     @test_throws ArgumentError to_smag(h,-1.0)
     @test_throws DimensionMismatch to_smag(h,[1.0])
@@ -221,4 +223,33 @@ end
         @test cut.weight ≈ reshape(exposure,2,2)
         @test cut.σ ≈ reshape(sqrt.(N_A) ./ exposure,2,2)
     end
+end
+
+@testset "Folded cuts at zone boundaries and path remainders" begin
+    q = collect(-0.5:0.125:0.5)
+    n = length(q)
+    h = reduction_histogram((q,q,[1.0]),ones(n,n,1),ones(n,n,1))
+    group = ([1.0 0; 0 1],[0.0 -1; 1 0],[-1.0 0; 0 -1],[0.0 1; -1 0],
+             [1.0 0; 0 -1],[-1.0 0; 0 1],[0.0 1; 1 0],[0.0 -1; -1 0])
+    path = [(0.0,0.0),(0.5,0.5)]
+    args = (;width=0.01,step=sqrt(2)/8,fold=group)
+    cut = cut_path(h,path;args...)
+    # Γ, the four sources (±t,±t) for each interior t, and the four corner sources that reach (1/2,1/2) by translation.
+    @test sum(cut.weight) == 17
+    @test cut.valid[end,1]
+    @test cut_path(h,path;args...,origin=(-0.25,-0.25)).weight == cut.weight
+    outside = cut_path(h,[(1.0,1.0),(1.5,1.5)];args...)
+    @test sum(outside.weight) == 17
+    @test !any(cut_path(h,[(1.0,1.0),(1.5,1.5)];args...,translations=false).valid)
+    long = sqrt(2)/2
+    keep = cut_path(h,path;width=0.01,step=0.3)
+    merge_ = cut_path(h,path;width=0.01,step=0.3,remainder=:merge)
+    drop = cut_path(h,path;width=0.01,step=0.3,remainder=:drop)
+    @test length(keep.s) == 3
+    @test length(merge_.s) == 2 && merge_.s[end] ≈ (0.3+long)/2
+    @test length(drop.s) == 2
+    @test sum(merge_.weight) == sum(keep.weight)
+    @test sum(drop.weight) < sum(keep.weight)
+    @test length(cut_path(h,path;width=0.01,step=1.0,remainder=:drop).s) == 1
+    @test_throws ArgumentError cut_path(h,path;width=0.01,step=0.3,remainder=:trim)
 end
