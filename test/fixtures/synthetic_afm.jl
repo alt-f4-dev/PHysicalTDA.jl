@@ -62,11 +62,12 @@ end
 _centres(e) = (e[1:end-1] .+ e[2:end]) ./ 2
 
 """
-    write_synthetic_afm(dir; seed=1) -> (A=(D, N), B=(D, N), truth)
+    write_synthetic_afm(dir; seed=1, hstep=0.05, ωstep=0.1) -> (A=(D, N), B=(D, N), truth)
 
-Write sets A and B into `dir` and return their paths with the generating parameters.
+Write sets A and B into `dir` and return their paths with the generating parameters. `hstep` and `ωstep` set
+the (H, K) and energy bins of set A.
 """
-function write_synthetic_afm(dir; seed::Integer=1)
+function write_synthetic_afm(dir; seed::Integer=1, hstep::Real=0.05, ωstep::Real=0.1)
     rng = MersenneTwister(seed)
     Minv = inv(AFM.M)
     elastic(ω) = _afm_gauss(ω, AFM.fwhm)
@@ -94,7 +95,7 @@ function write_synthetic_afm(dir; seed::Integer=1)
     end
 
     # Set A: (H, K, E), observed indices h_obs = M h + t, Bragg peaks at true integer and half-integer points.
-    hA, ωA, lA = collect(-1.0:0.05:1.0), collect(-3.0:0.1:9.0), [-2.0, 2.0]
+    hA, ωA, lA = collect(-1.0:hstep:1.0+1e-9), collect(-3.0:ωstep:9.0+1e-9), [-2.0, 2.0]
     hcA, ωcA = _centres(hA), _centres(ωA)
     shape = (length(hcA), length(hcA), length(ωcA), 1)
     DA, NA = zeros(shape), zeros(shape)

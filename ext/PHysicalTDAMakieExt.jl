@@ -231,13 +231,18 @@ function plot_qfi_summary(r::QFIResult, qs; normalization, m::Integer=1, nσ::Re
     return fig, NamedTuple{Tuple(panels)}(Tuple(panes[p] for p in panels))
 end
 
-function _overlay_masks!(ax, q, ω, masks)
-    labels = fill(NaN, length(q), length(ω))
+# Supports as a binary image: black outside, white inside (one parent), or white then distinct colours (several);
+# unmeasured bins are grey.
+function _draw_masks!(ax, q, ω, masks, measured)
+    labels = zeros(length(q), length(ω))
     for (b, M) in enumerate(masks)
         labels[M] .= b
     end
-    any(isfinite, labels) || return
-    heatmap!(ax, q, ω, labels; colormap=Makie.Categorical(:tab10), alpha=0.45)
+    measured === nothing || (labels[.!measured] .= NaN)
+    nb = max(length(masks), 1)
+    colours = [Makie.to_color(:black); Makie.to_color(:white); [Makie.to_color(_colour(b)) for b in 1:nb-1]]
+    heatmap!(ax, q, ω, labels; colormap=Makie.cgrad(colours[1:nb+1]; categorical=true), colorrange=(-0.5, nb + 0.5),
+             nan_color=:gray70)
 end
 
 function plot_ridge_workflow(I::AbstractMatrix{<:Real}, qs, ωs; valid=nothing, segmentation=nothing,
@@ -265,7 +270,13 @@ function plot_ridge_workflow(I::AbstractMatrix{<:Real}, qs, ωs; valid=nothing, 
     hm = nothing
     for (k, panel) in enumerate(panels)
         ax = Axis(fig[cld(k, ncol), mod1(k, ncol)]; xlabel, ylabel, title=_letter(k) * " " * names[panel])
-        hm = heatmap!(ax, q, ω, X; colormap, colorrange=range, nan_color=:white)
+        if panel in (:parents, :supports)
+            masks = panel === :supports ? supports :
+                    segmentation isa AbstractVector ? segmentation : band_supports(segmentation, length(q), length(ω))
+            _draw_masks!(ax, q, ω, masks, valid)
+        else
+            hm = heatmap!(ax, q, ω, X; colormap, colorrange=range, nan_color=:white)
+        end
         _decorate!(ax, markers, shade)
         if panel === :candidates
             c = candidates isa ChildRidgeResult ? candidates.candidates : candidates
@@ -273,9 +284,6 @@ function plot_ridge_workflow(I::AbstractMatrix{<:Real}, qs, ωs; valid=nothing, 
                 lines!(ax, [c.q[gp.iq], c.q[gp.iq]], [c.ω[gp.lo], c.ω[gp.hi]]; color=(:white, 0.6), linewidth=1)
             end
             scatter!(ax, [n.q for n in c.nodes], [n.ω for n in c.nodes]; color=:red, markersize=4)
-        elseif panel === :parents
-            masks = segmentation isa AbstractVector ? segmentation : band_supports(segmentation, length(q), length(ω))
-            _overlay_masks!(ax, q, ω, masks)
         elseif panel === :children
             for (ip, T) in enumerate(children.tracks), b in axes(T, 1)
                 lines!(ax, q, Float64.(T[b, :]); color=_colour(ip), linewidth=2)
@@ -285,8 +293,6 @@ function plot_ridge_workflow(I::AbstractMatrix{<:Real}, qs, ωs; valid=nothing, 
                                                       [nodes[i].ω for i in children.split_nodes]; color=:white, marker=:utriangle)
             isempty(children.merge_nodes) || scatter!(ax, [nodes[i].q for i in children.merge_nodes],
                                                       [nodes[i].ω for i in children.merge_nodes]; color=:white, marker=:dtriangle)
-        elseif panel === :supports
-            _overlay_masks!(ax, q, ω, supports)
         elseif panel === :trajectories
             for b in axes(trajectories.ω, 1)
                 lines!(ax, trajectories.q, trajectories.ω[b, :]; color=_colour(b), linewidth=2)
