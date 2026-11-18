@@ -114,6 +114,8 @@ cut = cut_path(h, [(0.0, 0.0), (0.5, 0.5)]; width=0.04, step=0.02, indices=hkl, 
 
 `cut_path` and `fold_to_zone` accept reciprocal-space point-operation matrices. Symmetry images sharing a destination count once per source bin. A folded cut includes every lattice translation of an image that reaches the path, so paths may end on zone boundaries such as `(1/2, 1/2)`. When the path length is not a multiple of `step`, `remainder=:keep`, `:merge`, or `:drop` controls the short final bin. The folded histogram records shared-source covariance, and later reductions account for it. A 2D cut sums over any omitted momentum coordinate. A diagonal selection `abs(H-K) ≤ w` corresponds to `width=w/sqrt(2)`.
 
+`cut_path(...; metric=:cartesian)` takes `width` and `step` in Å⁻¹ and returns `s` in Å⁻¹, which suits paths that include `L`. `fold` also accepts a `Sunny.Crystal`; `reciprocal_point_group(cryst; dims=2)` lists its operations on `(H, K)`. `cut_histogram(cut)` turns a cut into a two-axis `NormalizedHistogram`, so `rebin` and `rebin_to_resolution` combine its bins as `Σ(D - N b)/Σ(N g)`.
+
 With conversion and background, the cut evaluates `sum(D - N*b)/sum(N*g)`. A background can be a scalar, a histogram-shaped array, or a callable of measured `(|Q|, ω)`. Background uncertainties returned by a callable are treated as independent between source bins in `σ`; `σ_background` gives the bound for a background error fully correlated within each cut bin.
 
 ## Background
@@ -185,6 +187,22 @@ Nothing in the QFI functions is specific to a material:
 The relative contributions `ξ_b` do not depend on the absolute scale. `nQFI` and `G_m` require an
 isolated, absolutely normalized magnetic response; `to_smag` performs the conversion only when called.
 
+Systematic uncertainties enter the witness alongside the statistical one:
+
+```julia
+r = qfi(κ .* cut.values, cut.ω, T; σ=κ .* cut.σ, σ_sys=κ .* cut.σ_background, ωrange=(0.45, Inf))
+qfi_uncertainty(r; scale_σ=σκ/κ)                   # statistical, correlated background and scale, in quadrature
+w = qfi_witness(r; S=5/2, m=1, scale_σ=σκ/κ)       # nQFI_lb = (F_Q − nσ σ_tot)/B
+sens = qfi_sensitivity(Smag, ωs, T; σ=σS, lower_limits=[0.35, 0.45, 0.55, 0.65], S=5/2)  # rows: E_min
+compare_band_qfi(band_qfi(Smag, coarse_masks, ωs, T; σ=σS), band_qfi(Smag, refined_masks, ωs, T; σ=σS))
+```
+
+`σ_sys` is fully correlated across the energies of a momentum row, so it adds linearly over the
+energy integral (`r.σsys`); `scale_σ` is the relative uncertainty of the absolute scale. With neither,
+`nqfi_lower_bound` and `qfi_witness` are unchanged. `qfi_sensitivity` includes energies above each
+lower limit, `ω > E_min`. `compare_band_qfi` returns `Δξ`, a conservative `σΔξ` and whether the two
+sets of supports agree within `nσ`.
+
 ## Rebinning and child-ridge recovery
 
 Measured maps are usually rebinned to about one resolution width before segmentation. The QFI is
@@ -228,6 +246,7 @@ resolution_report(seg)   # Γq, Γω, the apparent Γω, their sources, and wher
 seg.qfirst.track_lengths # rows occupied by each peak track; short tracks do not add parent bands
 ```
 
+`ridge_max_gap_rows` lets the ridge graph bridge rows where a ridge has no peak (for example a masked column).
 `max_slope` (energy per unit of `qs`) links peaks of neighbouring rows one to one, closest first, within `max_slope·Δq`. Parent bands are counted from peaks on tracks that occupy at least `min_track_fraction` (default 0.25) of the rows, so short secondary features do not add parents. It also joins support components and ridge-graph nodes across that displacement. Without a supplied width, `resolution_estimate=:flat` estimates it from the columns where the strongest feature moves least, which on a steep dispersion is closer to the instrumental width than the default median half-height width. `ridge_long_beta0` counts the ridge-graph components that occupy at least `min_track_fraction` of the rows with peaks.
 
 ## Optional conventions
@@ -268,6 +287,14 @@ alternative is requested.
   the ridge graph drops isolated maxima in the first or last energy bin. To reproduce earlier results,
   pass `include_energy_edges=false` to those functions and `ridge_include_energy_edges=false` to
   `adaptive_autosplitbands2d`.
+
+- New: `cut_path(...; metric=:cartesian)`, `cut_histogram`, `reciprocal_point_group` and a
+  `Sunny.Crystal` as `fold`; cut results also carry `s_edges`, `ω_edges`, `numerator_covariance` and
+  `s_units`. `build_ridge_topology(...; max_gap_rows)` and `adaptive_autosplitbands2d(...;
+  ridge_max_gap_rows)` bridge rows without a peak (default 0, unchanged).
+- New: `qfi(...; σ_sys)`, `QFIResult.σsys`, `BandQFIResult.σsys`, `qfi_uncertainty`, and `scale_σ`
+  and `systematic` in `nqfi_lower_bound`, `qfi_witness` and `band_dependence`; `qfi_sensitivity` and
+  `compare_band_qfi`. Results without these options are unchanged.
 
 ## Changes in 0.1.2
 

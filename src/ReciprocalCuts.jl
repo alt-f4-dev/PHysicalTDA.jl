@@ -1,3 +1,33 @@
+_point_operations(cryst::Sunny.Crystal,dim::Val{P}) where {P} =
+    _point_operations(reciprocal_point_group(cryst;dims=P),dim)
+
+"""
+    reciprocal_point_group(cryst::Sunny.Crystal; dims=3, inversion=false) -> Vector{Matrix{Int}}
+
+Point operations of the crystal's space group acting on reciprocal-lattice indices, `h → Rᵀ h` for each
+real-space rotation `R` in lattice coordinates. With `dims = 2`, only operations that keep `L` separate from
+`(H, K)` are kept, as their `2 × 2` blocks. `inversion = true` adds `h → -h` (Friedel symmetry of an unpolarized,
+reciprocal response). Pass the result, or the crystal itself, as `fold` to [`cut_path`](@ref) or
+[`fold_to_zone`](@ref).
+"""
+function reciprocal_point_group(cryst::Sunny.Crystal;dims::Integer=3,inversion::Bool=false)
+    dims in (2,3) || throw(ArgumentError("dims must be 2 or 3"))
+    ops = Matrix{Int}[]
+    for op in cryst.sg.symops
+        R = round.(Int,transpose(Matrix(op.R)))
+        isapprox(R,transpose(Matrix(op.R));atol=1e-8) || throw(ArgumentError("non-integer point operation"))
+        if dims == 2
+            all(iszero,R[1:2,3]) && all(iszero,R[3,1:2]) || continue
+            R = R[1:2,1:2]
+        end
+        R in ops || push!(ops,R)
+        if inversion
+            -R in ops || push!(ops,-R)
+        end
+    end
+    return ops
+end
+
 function _point_operations(group,::Val{P}) where {P}
     ops = SMatrix{P,P,Float64,P*P}[]
     for matrix in (group isa AbstractMatrix ? (group,) : group)
@@ -249,16 +279,47 @@ With `fold` and `translations`, every lattice translation of each symmetry image
 
 When the path length is not a multiple of `step`, `remainder` keeps the short final bin (`:keep`), merges it into the preceding bin (`:merge`), or drops it together with the end cap (`:drop`).
 
+With `metric = :cartesian`, `width`, `step` and the returned `s` are in Å⁻¹, measured with the reciprocal basis
+(`reciprocal_basis` or the histogram lattice); use it when a path includes `L` or the axes are not orthonormal.
+`fold` may also be a `Sunny.Crystal` (see [`reciprocal_point_group`](@ref)).
+
 `σ` treats background uncertainties as independent between source bins. `σ_background` is `Σ N σ_b / Σ N g`, the bound for a background error fully correlated within each cut bin; it is zero without background uncertainties.
 """
 function cut_path(h::NormalizedHistogram,path;width::Real,step::Real,fold=nothing,background=nothing,conv=nothing,
                   exclude=nothing,indices=nothing,translations::Bool=true,origin=nothing,reciprocal_basis=nothing,
-                  remainder::Symbol=:keep)
-    return _cut_path(h,_path_geometry(path,width,step,remainder),fold,background,conv,exclude,indices,translations,origin,
-                     reciprocal_basis)
+                  remainder::Symbol=:keep,metric::Symbol=:rlu)
+    metric in (:rlu,:cartesian) || throw(ArgumentError("metric must be :rlu or :cartesian"))
+    metric === :rlu && return _cut_path(h,_path_geometry(path,width,step,remainder),fold,background,conv,exclude,
+                                        indices,translations,origin,reciprocal_basis)
+    vertices = map(_hkl_point,collect(path))
+    P = length(first(vertices))
+    G = SMatrix{3,P,Float64}(_reciprocal_basis(h,reciprocal_basis)[:,1:P])
+    geometry = _path_geometry([Tuple(G*v) for v in vertices],width,step,remainder)
+    # The lattice translations to visit lie in the HKL box that holds the cut's Å⁻¹ cylinder.
+    pad = Float64(width)/minimum(svdvals(Matrix(G)))+1e-9
+    lo = SVector{P,Float64}(ntuple(d -> minimum(v -> v[d],vertices)-pad,P))
+    hi = SVector{P,Float64}(ntuple(d -> maximum(v -> v[d],vertices)+pad,P))
+    transform = (;G,reach=(lo,hi),dim=Val(P))
+    return _cut_path(h,geometry,fold,background,conv,exclude,indices,translations,origin,reciprocal_basis,transform)
 end
 
-function _cut_path(h,path,fold,background,conv,exclude,indices,translations,origin,basis)
+"""
+    cut_histogram(cut) -> NormalizedHistogram
+
+Return a [`cut_path`](@ref) result as a two-axis histogram (`s`, `DeltaE`) holding the cut's numerator, numerator
+variance and denominator, with its shared-source covariance. [`rebin`](@ref), [`rebin_to_resolution`](@ref) and
+[`intensity`](@ref) then combine path and energy bins as `Σ(D - N b)/Σ(N g)`.
+"""
+function cut_histogram(cut)
+    all(k -> hasproperty(cut,k),(:numerator,:weight,:s_edges,:ω_edges)) || throw(ArgumentError("expected a cut_path result"))
+    edges = [collect(Float64,cut.s_edges),collect(Float64,cut.ω_edges)]
+    centres = [collect(Float64,cut.s),collect(Float64,cut.ω)]
+    meta = (;runs=NamedTuple[],q_convention=nothing,numerator_covariance=cut.numerator_covariance)
+    return NormalizedHistogram(copy(cut.numerator),cut.variance === nothing ? nothing : copy(cut.variance),copy(cut.weight),
+                               edges,centres,["s","DeltaE"],[cut.s_units,"DeltaE"],["path","General Frame"],meta)
+end
+
+function _cut_path(h,path,fold,background,conv,exclude,indices,translations,origin,basis,transform=nothing)
     g = _momentum_geometry(h)
     _check_bin_array(conv,h,"conv")
     _check_bin_array(background,h,"background")
@@ -267,10 +328,12 @@ function _cut_path(h,path,fold,background,conv,exclude,indices,translations,orig
     _check_bin_array(mask,h,"exclude")
     predicate = mask === nothing ? exclude : nothing
     norms = _background_norms(h,g,background,basis)
-    dim = Val(length(first(path.points)))
+    dim = transform === nothing ? Val(length(first(path.points))) : transform.dim
     ops = fold === nothing ? nothing : _point_operations(fold,dim)
-    target = q -> predicate !== nothing && predicate(q) ? 0 : _path_bin(q,path)
-    targets = _momentum_targets(target,g,indices,ops,_zone_origin(origin,dim),translations,path.reach)
+    target = transform === nothing ? (q -> predicate !== nothing && predicate(q) ? 0 : _path_bin(q,path)) :
+        (q -> predicate !== nothing && predicate(q) ? 0 : _path_bin(transform.G*q,path))
+    reach = transform === nothing ? path.reach : transform.reach
+    targets = _momentum_targets(target,g,indices,ops,_zone_origin(origin,dim),translations,reach)
     shape = (length(path.edges)-1,size(h.D,g.energy))
     numerator,variance,weight,cov,systematic = _scatter_reciprocal(h,g,targets,shape,conv,background,norms,mask)
     valid = weight .> 0
@@ -279,5 +342,7 @@ function _cut_path(h,path,fold,background,conv,exclude,indices,translations,orig
     σ_background = map((b,n) -> n>0 ? b/n : NaN,systematic,weight)
     covariance = _CovarianceEntry[(i,j,v/(weight[i]*weight[j])) for (i,j,v) in cov if valid[i] && valid[j]]
     s = [(path.edges[i]+path.edges[i+1])/2 for i in 1:shape[1]]
-    return (;values,σ,weight,s,ω=h.centres[g.energy],numerator,variance,valid,covariance,σ_background)
+    return (;values,σ,weight,s,ω=h.centres[g.energy],numerator,variance,valid,covariance,σ_background,
+            s_edges=copy(path.edges),ω_edges=copy(h.edges[g.energy]),numerator_covariance=cov,
+            s_units=transform === nothing ? "r.l.u." : "Å^-1")
 end

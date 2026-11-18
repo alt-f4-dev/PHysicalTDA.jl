@@ -138,13 +138,18 @@ Momentum-resolved QFI returned by [`qfi`](@ref).
 - `σFQ`   :: propagated one-standard-deviation uncertainty (zeros when no `σ` was given).
 - `nbins` :: number of measured (non-`NaN`) bins entering each `F_Q(q_i, T)`.
 - `T`     :: temperature used in the kernel.
+- `σsys`  :: systematic uncertainty fully correlated across the energies of each row (zeros when no
+             `σ_sys` was given); see [`qfi`](@ref).
 """
 struct QFIResult
     FQ::Vector{Float64}
     σFQ::Vector{Float64}
     nbins::Vector{Int}
     T::Float64
+    σsys::Vector{Float64}
 end
+
+QFIResult(FQ, σFQ, nbins, T) = QFIResult(FQ, σFQ, nbins, T, zeros(length(FQ)))
 
 """
     qfi(S, ωs, T; σ=nothing, mask=nothing, ωrange=(0, Inf), Δω=nothing, kB=KB_MEV_PER_K) -> QFIResult
@@ -160,6 +165,8 @@ Momentum-resolved QFI `F_Q(q_i, T) = Σ_j K_T(ω_j) S(q_i, ω_j) Δω_j` over th
 - `ωrange` :: energy window; set `ωrange[1]` above the elastic line to exclude it.
 - `Δω`     :: bin widths (scalar or vector); inferred from `ωs` by default
               ([`energy_bin_widths`](@ref)).
+- `σ_sys`  :: optional `nq × nω` systematic uncertainties fully correlated across the energies of a
+              row, such as `σ_background` from [`cut_path`](@ref); `σsys_i = Σ_j K_T Δω_j σ_sys,ij`.
 
 Bins where `S` (or `σ`) is `NaN` are treated as unmeasured and skipped. Because
 `K_T ≥ 0`, restricting the sum to measured bins of a non-negative magnetic response
@@ -171,15 +178,17 @@ function qfi(S::AbstractMatrix{<:Real}, ωs, T::Real;
              mask::Union{Nothing,AbstractMatrix{Bool}}=nothing,
              ωrange::Tuple{<:Real,<:Real}=(0, Inf),
              Δω=nothing,
-             kB::Real=KB_MEV_PER_K)
+             kB::Real=KB_MEV_PER_K,
+             σ_sys::Union{Nothing,AbstractMatrix{<:Real}}=nothing)
     _check_grid(S, ωs)
     _check_same_size(σ, S, "σ")
     _check_same_size(mask, S, "mask")
+    _check_same_size(σ_sys, S, "σ_sys")
     K = [qfi_kernel(ω, T; kB=kB) for ω in ωs]
     w = _energy_weights(ωs, Δω)
     cols = _included_columns(ωs, ωrange)
     nq = size(S, 1)
-    FQ = zeros(Float64, nq); var = zeros(Float64, nq); nb = zeros(Int, nq)
+    FQ = zeros(Float64, nq); var = zeros(Float64, nq); nb = zeros(Int, nq); sys = zeros(Float64, nq)
     @inbounds for (jj, j) in enumerate(axes(S, 2))
         cols[jj] || continue
         c = K[jj] * w[jj]
@@ -192,9 +201,24 @@ function qfi(S::AbstractMatrix{<:Real}, ωs, T::Real;
             FQ[ii] += c * s
             var[ii] += (c * e)^2
             nb[ii] += 1
+            if σ_sys !== nothing
+                b = Float64(σ_sys[i, j])
+                isfinite(b) && (sys[ii] += c * abs(b))
+            end
         end
     end
-    return QFIResult(FQ, sqrt.(var), nb, Float64(T))
+    return QFIResult(FQ, sqrt.(var), nb, Float64(T), sys)
+end
+
+"""
+    qfi_uncertainty(r::QFIResult; scale_σ=0, systematic=true)
+
+Total one-standard-deviation uncertainty of `F_Q`: the statistical `σFQ`, the correlated systematic `σsys`
+(with `systematic = true`) and a relative scale uncertainty `scale_σ · F_Q`, added in quadrature.
+"""
+function qfi_uncertainty(r::QFIResult; scale_σ::Real=0, systematic::Bool=true)
+    isfinite(scale_σ) && scale_σ >= 0 || throw(ArgumentError("scale_σ must be finite and non-negative; got $scale_σ."))
+    return sqrt.(r.σFQ .^ 2 .+ (systematic ? r.σsys .^ 2 : 0.0) .+ (scale_σ .* r.FQ) .^ 2)
 end
 
 #-------------------------#
@@ -261,18 +285,21 @@ nqfi(FQ::AbstractVector{<:Real}; kwargs...) = Float64.(FQ) ./ qfi_bound(; kwargs
 nqfi(r::QFIResult; kwargs...) = nqfi(r.FQ; kwargs...)
 
 """
-    nqfi_lower_bound(r::QFIResult; nσ=2, bound_kwargs...)
+    nqfi_lower_bound(r::QFIResult; nσ=2, scale_σ=0, systematic=true, bound_kwargs...)
 
-Conservative normalized QFI `(F_Q − nσ σ_FQ) / B`, with `B` from [`qfi_bound`](@ref)
-(`S`/`N`, `spins` or `bound`, and `ncomponents`).
+Conservative normalized QFI `(F_Q − nσ σ_tot) / B`, with `B` from [`qfi_bound`](@ref)
+(`S`/`N`, `spins` or `bound`, and `ncomponents`) and `σ_tot` from [`qfi_uncertainty`](@ref):
+the statistical uncertainty, any correlated systematic `σsys`, and the relative scale
+uncertainty `scale_σ` (for example `σ_κ/κ`), in quadrature. With the defaults and no `σ_sys`,
+this is `(F_Q − nσ σ_FQ) / B`.
 """
-function nqfi_lower_bound(r::QFIResult; nσ::Real=2, kwargs...)
+function nqfi_lower_bound(r::QFIResult; nσ::Real=2, scale_σ::Real=0, systematic::Bool=true, kwargs...)
     nσ >= 0 || throw(ArgumentError("nσ must be non-negative; got $nσ."))
-    return (r.FQ .- nσ .* r.σFQ) ./ qfi_bound(; kwargs...)
+    return (r.FQ .- nσ .* qfi_uncertainty(r; scale_σ, systematic)) ./ qfi_bound(; kwargs...)
 end
 
 """
-    qfi_witness(r::QFIResult; m=1, nσ=2, bound_kwargs...)
+    qfi_witness(r::QFIResult; m=1, nσ=2, scale_σ=0, systematic=true, bound_kwargs...)
 
 Entanglement-witness criterion `G_m(q, T)` (Eq. S30). The normalization is given as
 for [`qfi_bound`](@ref) (`S`/`N`, `spins` or `bound`, and `ncomponents`). Returns a
@@ -285,9 +312,9 @@ named tuple
 
 `false` means only that entanglement was not certified.
 """
-function qfi_witness(r::QFIResult; m::Integer=1, nσ::Real=2, kwargs...)
+function qfi_witness(r::QFIResult; m::Integer=1, nσ::Real=2, scale_σ::Real=0, systematic::Bool=true, kwargs...)
     m >= 1 || throw(ArgumentError("m must be a positive integer; got $m."))
-    lb = nqfi_lower_bound(r; nσ=nσ, kwargs...)
+    lb = nqfi_lower_bound(r; nσ=nσ, scale_σ, systematic, kwargs...)
     return (nqfi_lb=lb, certified=BitVector(lb .> m), m=Int(m))
 end
 
@@ -374,6 +401,8 @@ Band-resolved QFI returned by [`band_qfi`](@ref). With `nb` bands and `nq` momen
 - `ξ`, `σξ` :: `nb × nq` relative contributions `F_Q^(b) / F_Q` (Eq. S31) and their
   uncertainties; `NaN` where `F_Q ≤ 0`. The denominator is the QFI over the
   measured domain, i.e. `ξ_b^obs` when only part of the spectrum was measured.
+  `σξ` is statistical; a correlated systematic shifts band and total together.
+- `σsys` :: `nb × nq` correlated systematic uncertainty of each band (zeros without `σ_sys`).
 
 `total.FQ == vec(sum(FQ; dims=1)) .+ FQres` up to rounding.
 """
@@ -385,7 +414,10 @@ struct BandQFIResult
     σres::Vector{Float64}
     ξ::Matrix{Float64}
     σξ::Matrix{Float64}
+    σsys::Matrix{Float64}
 end
+
+BandQFIResult(total, FQ, σFQ, FQres, σres, ξ, σξ) = BandQFIResult(total, FQ, σFQ, FQres, σres, ξ, σξ, zeros(size(FQ)))
 
 """
     band_qfi(S, supports, ωs, T; σ=nothing, ωrange=(0, Inf), Δω=nothing, kB=KB_MEV_PER_K)
@@ -407,7 +439,8 @@ function band_qfi(S::AbstractMatrix{<:Real}, supports::AbstractVector{<:Abstract
                   σ::Union{Nothing,AbstractMatrix{<:Real}}=nothing,
                   ωrange::Tuple{<:Real,<:Real}=(0, Inf),
                   Δω=nothing,
-                  kB::Real=KB_MEV_PER_K)
+                  kB::Real=KB_MEV_PER_K,
+                  σ_sys::Union{Nothing,AbstractMatrix{<:Real}}=nothing)
     _check_grid(S, ωs)
     for (b, M) in enumerate(supports)
         size(M) == size(S) ||
@@ -419,14 +452,15 @@ function band_qfi(S::AbstractMatrix{<:Real}, supports::AbstractVector{<:Abstract
     end
     any(>(1), coverage) && throw(ArgumentError("band supports overlap; band-resolved QFI requires disjoint supports."))
 
-    kw = (σ=σ, ωrange=ωrange, Δω=Δω, kB=kB)
+    kw = (σ=σ, ωrange=ωrange, Δω=Δω, kB=kB, σ_sys=σ_sys)
     total = qfi(S, ωs, T; kw...)
     nb, nq = length(supports), size(S, 1)
-    FQ = zeros(Float64, nb, nq); σFQ = zeros(Float64, nb, nq)
+    FQ = zeros(Float64, nb, nq); σFQ = zeros(Float64, nb, nq); σsys = zeros(Float64, nb, nq)
     for (b, M) in enumerate(supports)
         rb = qfi(S, ωs, T; mask=M, kw...)
         FQ[b, :] .= rb.FQ
         σFQ[b, :] .= rb.σFQ
+        σsys[b, :] .= rb.σsys
     end
     rres = qfi(S, ωs, T; mask=coverage .== 0, kw...)
 
@@ -444,7 +478,7 @@ function band_qfi(S::AbstractMatrix{<:Real}, supports::AbstractVector{<:Abstract
             σξ[b, i] = sqrt((1 - x)^2 * vara + x^2 * varrest) / F
         end
     end
-    return BandQFIResult(total, FQ, σFQ, rres.FQ, rres.σFQ, ξ, σξ)
+    return BandQFIResult(total, FQ, σFQ, rres.FQ, rres.σFQ, ξ, σξ, σsys)
 end
 
 function band_qfi(S::AbstractMatrix{<:Real}, result::NamedTuple, ωs, T::Real;
@@ -471,12 +505,53 @@ using the point estimate `F_Q^(b)` and the bound `B` from [`qfi_bound`](@ref)
 A certificate that is lost when `b` is removed depends on that band. This
 attributes contribution, not an entanglement depth per band.
 """
-function band_dependence(br::BandQFIResult; m::Integer=1, nσ::Real=2, kwargs...)
-    w = qfi_witness(br.total; m=m, nσ=nσ, kwargs...)
+function band_dependence(br::BandQFIResult; m::Integer=1, nσ::Real=2, scale_σ::Real=0, systematic::Bool=true,
+                         kwargs...)
+    w = qfi_witness(br.total; m=m, nσ=nσ, scale_σ, systematic, kwargs...)
     B = qfi_bound(; kwargs...)
     without = w.nqfi_lb' .- br.FQ ./ B
     return (nqfi_lb=w.nqfi_lb, certified=w.certified,
             nqfi_lb_without=Matrix(without), certified_without=BitMatrix(without .> m))
+end
+
+"""
+    qfi_sensitivity(S, ωs, T; lower_limits, upper=Inf, m=1, nσ=2, scale_σ=0, systematic=true,
+                    σ=nothing, σ_sys=nothing, mask=nothing, Δω=nothing, kB=KB_MEV_PER_K, bound_kwargs...)
+
+`F_Q(q)` and the witness for each lower energy limit in `lower_limits` (the window `(E_min, upper)`), to show how
+much of the certificate rests on low energies near the elastic line. Returns `(lower_limits, FQ, σFQ, σsys,
+nqfi_lb, certified)`, with one row per limit and one column per momentum.
+"""
+function qfi_sensitivity(S::AbstractMatrix{<:Real}, ωs, T::Real; lower_limits, upper::Real=Inf, m::Integer=1,
+                         nσ::Real=2, scale_σ::Real=0, systematic::Bool=true, σ=nothing, σ_sys=nothing, mask=nothing,
+                         Δω=nothing, kB::Real=KB_MEV_PER_K, kwargs...)
+    limits = collect(Float64, lower_limits)
+    isempty(limits) && throw(ArgumentError("supply at least one lower limit"))
+    nq = size(S, 1)
+    FQ, σFQ, σsys, lb = (zeros(length(limits), nq) for _ in 1:4)
+    certified = falses(length(limits), nq)
+    for (k, emin) in enumerate(limits)
+        r = qfi(S, ωs, T; σ, σ_sys, mask, Δω, kB, ωrange=(emin, upper))
+        w = qfi_witness(r; m, nσ, scale_σ, systematic, kwargs...)
+        FQ[k, :] .= r.FQ; σFQ[k, :] .= r.σFQ; σsys[k, :] .= r.σsys
+        lb[k, :] .= w.nqfi_lb; certified[k, :] .= w.certified
+    end
+    return (lower_limits=limits, FQ, σFQ, σsys, nqfi_lb=lb, certified)
+end
+
+"""
+    compare_band_qfi(a::BandQFIResult, b::BandQFIResult; nσ=2)
+
+Compare the band fractions `ξ` of the same spectrum from two sets of supports (for example resolution-matched and
+refined). Returns `(Δξ, σΔξ, ΔFQ, consistent)` with `Δξ = ξ_a − ξ_b`, `σΔξ = √(σξ_a² + σξ_b²)` (an upper bound,
+since the two share data) and `consistent = |Δξ| ≤ nσ σΔξ`, per band and momentum. The scale cancels in `ξ`.
+"""
+function compare_band_qfi(a::BandQFIResult, b::BandQFIResult; nσ::Real=2)
+    size(a.ξ) == size(b.ξ) || throw(DimensionMismatch("band results must have the same bands and momenta"))
+    nσ >= 0 || throw(ArgumentError("nσ must be non-negative; got $nσ."))
+    Δξ = a.ξ .- b.ξ
+    σΔξ = sqrt.(a.σξ .^ 2 .+ b.σξ .^ 2)
+    return (Δξ=Δξ, σΔξ=σΔξ, ΔFQ=a.FQ .- b.FQ, consistent=BitMatrix(abs.(Δξ) .<= nσ .* σΔξ))
 end
 
 #------------------------------#

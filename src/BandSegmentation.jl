@@ -1180,6 +1180,7 @@ function build_ridge_topology(Iqω::AbstractMatrix{<:Real}, qs, ωs;
                               max_peaks_per_slice::Int=2,
                               max_jump_bins::Union{Nothing,Int}=nothing,
                               prominence_lag::Int=1,
+                              max_gap_rows::Int=0,
                               tube_radius_ω::Int=1,
                               periodic_q::Bool=false,
                               pixel_adjacency::Symbol=:full,
@@ -1250,6 +1251,9 @@ function build_ridge_topology(Iqω::AbstractMatrix{<:Real}, qs, ωs;
         end
     end
 
+    max_gap_rows >= 0 || throw(ArgumentError("max_gap_rows must be nonnegative"))
+    gap_edges = max_gap_rows > 0 ? bridge_ridge_gaps!(edges, nodes, node_ids, jump, max_gap_rows; periodic_q=periodic_q) : 0
+
     pattern_edges_added, splitmerge_pattern = add_splitmerge_pattern_edges!(edges, nodes, node_ids, peaks_local, scores_local, nω;
                                                                             min_cycle_q_fraction=min_cycle_q_fraction,
                                                                             min_two_peak_fraction=min_two_peak_fraction,
@@ -1303,6 +1307,7 @@ function build_ridge_topology(Iqω::AbstractMatrix{<:Real}, qs, ωs;
         :splitmerge_pattern_edges_added => pattern_edges_added,
         :splitmerge_pattern => splitmerge_pattern,
         :isolated_edge_nodes_dropped => count(isolated_edge),
+        :gap_edges => gap_edges,
         :component_rows => _component_rows(nodes, comp_labels, ngraph_components),
     )
     return RidgeTopologyResult(nodes, edges, beta0, beta1,
@@ -1949,6 +1954,7 @@ Resolution and grid options (all off by default):
   in resolution elements instead of pixels, so the segmentation of an unrebinned grid matches that of a
   resolution-matched one.
 
+`ridge_max_gap_rows` lets the ridge graph bridge up to that many momentum rows without a matching peak.
 `include_energy_edges` also applies to the ridge topology unless `ridge_include_energy_edges` is given; isolated maxima in the first or last energy bin are
 dropped from the ridge graph. `ridge_long_beta0` counts the ridge-graph components that occupy at least
 `min_track_fraction` of the rows with peaks.
@@ -1983,6 +1989,7 @@ function adaptive_autosplitbands2d(Iqω_in::AbstractMatrix{<:Real}, qs, ωs;
                                    ridge_min_two_peak_fraction::Float64=0.15,
                                    ridge_min_cycle_confidence::Float64=0.55,
                                    ridge_include_energy_edges::Bool=include_energy_edges,
+                                   ridge_max_gap_rows::Int=0,
                                    max_slope::Union{Nothing,Real}=nothing,
                                    min_track_fraction::Real=0.25,
                                    physical_units::Bool=false,
@@ -2097,6 +2104,7 @@ function adaptive_autosplitbands2d(Iqω_in::AbstractMatrix{<:Real}, qs, ωs;
                                                                   max_peaks_per_slice=effective_ridge_max_peaks,
                                                                   max_jump_bins=ridge_jump,
                                                                   prominence_lag=prominence_lag,
+                                                                  max_gap_rows=ridge_max_gap_rows,
                                                                   tube_radius_ω=ridge_tube,
                                                                   periodic_q=ridge_periodic_q,
                                                                   pixel_adjacency=pixel_adjacency,
@@ -2154,6 +2162,38 @@ function _long_components(t::RidgeTopologyResult, fraction)
     rows = get(t.diagnostics, :component_rows, Int[])
     occupied = count(>(0), t.peak_counts)
     return count(>=(fraction * occupied), rows)
+end
+
+# Join a node with no link to the next row to the nearest node, up to `max_gap` rows further on, that has no
+# link from its previous row, when the energy moves at most `jump` bins per row crossed.
+function bridge_ridge_gaps!(edges, nodes, node_ids, jump, max_gap; periodic_q::Bool=false)
+    nq = length(node_ids)
+    forward, backward = falses(length(nodes)), falses(length(nodes))
+    step(a, b) = mod(nodes[b].iq - nodes[a].iq, nq)
+    for (a, b) in edges
+        nodes[a].iq == nodes[b].iq && continue
+        if step(a, b) == 1 || (!periodic_q && nodes[b].iq == nodes[a].iq + 1)
+            forward[a] = backward[b] = true
+        elseif step(b, a) == 1
+            forward[b] = backward[a] = true
+        end
+    end
+    added = 0
+    for iq in 1:nq, a in node_ids[iq]
+        forward[a] && continue
+        for gap in 2:max_gap+1
+            jq = iq + gap
+            jq > nq && (periodic_q ? (jq -= nq) : break)
+            candidates = [b for b in node_ids[jq] if !backward[b] && abs(nodes[b].iω - nodes[a].iω) <= jump * gap]
+            isempty(candidates) && continue
+            b = candidates[argmin([abs(nodes[b].iω - nodes[a].iω) for b in candidates])]
+            push!(edges, (a, b))
+            forward[a] = backward[b] = true
+            added += 1
+            break
+        end
+    end
+    return added
 end
 
 # Number of distinct momentum rows occupied by each ridge-graph component, largest first.
