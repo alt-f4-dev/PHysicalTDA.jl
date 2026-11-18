@@ -96,6 +96,24 @@ eachslice_mdnorm(path_D, path_N; dim=4, ranges=(:, :, 5:20, :), metadata=false) 
 end
 ```
 
+## MDNorm reductions
+
+Fit Bragg positions in an elastic energy window and use the inverse affine map to place bins in cuts and symmetry folds. Magnetic conversion uses the measured momentum and the Cartesian moment axis. The reciprocal basis includes `2π`.
+
+```julia
+peaks = find_bragg_peaks(h; positions=bragg_hkl, energy_window=(-0.5, 0.5))
+fit = fit_index_correction(peaks)
+hkl = corrected_indices(h, fit.M, fit.t)
+g = magnetic_conversion(h; ion=:Mn2, channel=:transverse)
+cut = cut_path(h, [(0.0, 0.0), (0.5, 0.5)]; width=0.04, step=0.02, indices=hkl, conv=g)
+```
+
+`rebin`, `integrate`, and the histogram overload of `rebin_to_resolution` combine numerator, variance, and exposure before forming intensity. Use explicit factors for multidimensional grids. `weighted_average` and `magnetic_conversion(h; average_over=l_dim)` retain singleton dimensions for subsequent mapping with `map_nearest_bins`.
+
+`cut_path` and `fold_to_zone` accept reciprocal-space point-operation matrices. Symmetry images sharing a destination count once per source bin. The folded histogram records shared-source covariance, and later reductions account for it. A 2D cut sums over any omitted momentum coordinate. A diagonal selection `abs(H-K) ≤ w` corresponds to `width=w/sqrt(2)`.
+
+With conversion and background, the cut evaluates `sum(D - N*b)/sum(N*g)`. A background can be a scalar, a histogram-shaped array, or a callable of measured `(|Q|, ω)`. Background uncertainties returned by a callable are treated as independent between source bins.
+
 ## Quantum Fisher information
 
 The QFI functions implement Sec. S2 of the Supplemental Material:
