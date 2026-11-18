@@ -45,16 +45,24 @@ function _reciprocal_basis(h,basis)
 end
 
 """
-    magnetic_conversion(h; ion=:Mn2, moment_axis=(0,0,1), channel=:transverse, average_over=nothing, reciprocal_basis=nothing)
+    magnetic_conversion(h; ion=:Mn2, moment_axis=(0,0,1), channel=:transverse, average_over=nothing, reciprocal_basis=nothing,
+                        l_average=nothing)
 
 Evaluate squared form factor times polarization at measured HKL. The reciprocal basis includes `2π` in Å⁻¹. The default basis places direct `a` along Cartesian x and `a×b` along z. Provide Mn²⁺, form factor coefficients, or a function of `|Q|`. Use `average_over` for exposure-weighted averaging.
+
+`l_average = (values, weights)` replaces the stored `L` of each bin by an average over the given `L` values, at the
+bin's own `(H, K)`. Use it for a histogram integrated over `L`, with the `L` exposure of an `L`-resolved
+measurement as weights, for example `(hB.centres[l], vec(sum(hB.N; dims=other_axes)))`. The factor is then
+evaluated at the fine `(H, K)` grid rather than mapped from a coarser one, which matters where it varies quickly
+(near `Q = 0`).
 """
 function magnetic_conversion(h::NormalizedHistogram;ion=:Mn2,moment_axis=(0,0,1),channel::Symbol=:transverse,
-                             average_over=nothing,reciprocal_basis=nothing)
+                             average_over=nothing,reciprocal_basis=nothing,l_average=nothing)
     g = _momentum_geometry(h)
     basis = _reciprocal_basis(h,reciprocal_basis)
     F = _form_factor_function(ion === :Mn2 ? MN2_J0 : ion)
-    factors = _momentum_factors(g,basis,F,_moment_direction(moment_axis),_polarization_channel(channel))
+    m, mode = _moment_direction(moment_axis), _polarization_channel(channel)
+    factors = l_average === nothing ? _momentum_factors(g,basis,F,m,mode) : _l_averaged_factors(g,basis,F,m,mode,l_average)
     field = i -> factors[_momentum_index(g,i)]
     return average_over === nothing ? map(field,CartesianIndices(h.D)) : weighted_average(h,field;dims=average_over)
 end
@@ -64,6 +72,23 @@ function _momentum_factors(g,basis,F::T,m,mode) where {T}
         Q = basis*_stored_hkl(g,i)
         n = norm(Q)
         abs2(F(n))*_polarization_vector(Q,n,m,mode)
+    end
+end
+
+function _l_averaged_factors(g,basis,F::T,m,mode,l_average) where {T}
+    values, weights = l_average
+    ls, w = collect(Float64,values), collect(Float64,weights)
+    length(ls) == length(w) && !isempty(ls) || throw(DimensionMismatch("l_average needs one weight per L value"))
+    all(x -> isfinite(x) && x >= 0,w) && sum(w) > 0 || throw(ArgumentError("l_average weights must be nonnegative with a positive sum"))
+    keep = w .> 0
+    ls, w = ls[keep], w[keep] ./ sum(w[keep])
+    return map(CartesianIndices(g.shape)) do i
+        hkl = _stored_hkl(g,i)
+        sum(w[k]*begin
+            Q = basis*SVector(hkl[1],hkl[2],ls[k])
+            n = norm(Q)
+            abs2(F(n))*_polarization_vector(Q,n,m,mode)
+        end for k in eachindex(ls))
     end
 end
 

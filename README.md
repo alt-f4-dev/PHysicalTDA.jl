@@ -292,6 +292,9 @@ alternative is requested.
   `Sunny.Crystal` as `fold`; cut results also carry `s_edges`, `ω_edges`, `numerator_covariance` and
   `s_units`. `build_ridge_topology(...; max_gap_rows)` and `adaptive_autosplitbands2d(...;
   ridge_max_gap_rows)` bridge rows without a peak (default 0, unchanged).
+- New: `plot_qfi_summary` and `plot_ridge_workflow` (Makie extension), and
+  `magnetic_conversion(...; l_average=(values, weights))`, which averages the polarization factor over `L` at
+  each bin's own `(H, K)`.
 - New: `qfi(...; σ_sys)`, `QFIResult.σsys`, `BandQFIResult.σsys`, `qfi_uncertainty`, and `scale_σ`
   and `systematic` in `nqfi_lower_bound`, `qfi_witness` and `band_dependence`; `qfi_sensitivity` and
   `compare_band_qfi`. Results without these options are unchanged.
@@ -332,3 +335,16 @@ Plotting helpers (`plot_persistence_diagram`, `plot_betti_surface`, ...) are pro
 using PHysicalTDA, CairoMakie      # or GLMakie
 fig = plot_persistence_entropy(dataset; backend=:cairo)
 ```
+
+Two layouts assemble the analysis results into figures. Material details are keywords: the separable bound
+(`normalization`), model curves, marked momenta and shaded intervals, labels.
+
+```julia
+fig, ax = plot_qfi_summary(r, hs; normalization=(; S=5/2), scale_σ=σκ/κ, bands=br, sensitivity=sens,
+                           comparison=compare_band_qfi(br, br_refined), models=(; LSWT=FQ_lswt),
+                           markers=(0.5,), xlabel="(h, h) (r.l.u.)", backend=:cairo)
+fig, ax = plot_ridge_workflow(I, hs, ωs; valid, segmentation=seg, candidates, children, supports=refined,
+                              trajectories, markers=(0.5,), backend=:cairo)
+```
+
+Each returns the figure and its axes by panel name; panels appear only for the results given.

@@ -96,7 +96,7 @@ export symmetrize_q, MN2_J0, magnetic_form_factor, to_smag
 #Lazy Plotting
 # Implemented in ext/PHysicalTDAMakieExt.jl, which Julia loads automatically
 # when Makie is loaded (e.g. `using CairoMakie` or `using GLMakie`).
-export enable_visuals, plot_persistence_diagram, plot_lifetime_diagram, plot_persistence_entropy, plot_betti_curvature, plot_betti_surface, plot_dataset_overview
+export enable_visuals, plot_persistence_diagram, plot_lifetime_diagram, plot_persistence_entropy, plot_betti_curvature, plot_betti_surface, plot_dataset_overview, plot_qfi_summary, plot_ridge_workflow
 
 const _viz_loaded = Ref(false)
 _viz_ext() = Base.get_extension(@__MODULE__, :PHysicalTDAMakieExt)
@@ -158,6 +158,39 @@ end
 function plot_dataset_overview(args...; backend::Symbol=:gl, kwargs...)
     _ensure_viz(backend=backend)
     return Base.invokelatest(_viz_call, :plot_dataset_overview, args...; kwargs...)
+end
+
+"""
+    plot_qfi_summary(r::QFIResult, qs; normalization, m=1, nσ=2, scale_σ=0, systematic=true, bands=nothing,
+                     sensitivity=nothing, comparison=nothing, models=(;), markers=(), shade=(), xlabel="q",
+                     band_labels=nothing, title=nothing, size=nothing, backend=:gl) -> (fig, axes)
+
+QFI figure from package results: `F_Q(q)` with its total uncertainty ([`qfi_uncertainty`](@ref)) and optional
+model curves (`models`, named vectors over `qs`); `nQFI_lb(q)` with the bins certified at depth `m`; and, when
+given, band fractions `ξ` from a [`BandQFIResult`](@ref), the lower-energy-limit scan of
+[`qfi_sensitivity`](@ref), and a [`compare_band_qfi`](@ref) result. `normalization` holds the keywords of
+[`qfi_bound`](@ref), for example `(; S=5/2)`. `markers` (momenta) and `shade` (intervals) mark special points in
+every panel. Requires Makie; returns the figure and its axes by panel name.
+"""
+function plot_qfi_summary(args...; backend::Symbol=:gl, kwargs...)
+    _ensure_viz(backend=backend)
+    return Base.invokelatest(_viz_call, :plot_qfi_summary, args...; kwargs...)
+end
+
+"""
+    plot_ridge_workflow(I, qs, ωs; valid=nothing, segmentation=nothing, candidates=nothing, children=nothing,
+                        supports=nothing, trajectories=nothing, markers=(), shade=(), xlabel="q", ylabel="ω (meV)",
+                        colormap=:viridis, colorrange=nothing, title=nothing, size=nothing, backend=:gl) -> (fig, axes)
+
+Band- and ridge-recovery figure on one grid: the intensity, then one panel for each result given — ridge
+candidates ([`find_ridge_candidates`](@ref)), parent supports (an [`adaptive_autosplitbands2d`](@ref) result or
+masks), child ridges ([`recover_child_ridges`](@ref)), refined supports ([`refine_supports`](@ref)) and
+trajectories ([`mask_dispersions`](@ref)). Unmeasured bins (`valid = false`) are blank. Requires Makie; returns
+the figure and its axes by panel name.
+"""
+function plot_ridge_workflow(args...; backend::Symbol=:gl, kwargs...)
+    _ensure_viz(backend=backend)
+    return Base.invokelatest(_viz_call, :plot_ridge_workflow, args...; kwargs...)
 end
 
 end #module
